@@ -14,6 +14,7 @@ import {
 } from "../../src/tools/flows/flow-utils";
 import { createRunFlowTool } from "../../src/tools/flows/flow-run";
 import { createFlowAddStepTool, directiveCommandHint } from "../../src/tools/flows/flow-add-step";
+import { reservedScriptEnvNamesForMessage } from "../../src/tools/flows/script/flow-script-executor";
 
 /**
  * Keep the core skill's scope routing concise while guarding the linked
@@ -271,6 +272,23 @@ describe("create-flow script docs", () => {
       expect(description(), kind).toMatch(
         new RegExp(`a script-only flow runs with nothing booted[^.]*\`${kind}\``)
       );
+    }
+  });
+
+  it("keeps the reference's env example parsable and its reserved list complete", () => {
+    const section = between(FLOW_YAML, "## Environment values", "\n## Snapshots");
+    // The example, exactly as an author would copy it.
+    const example = section.match(/```yaml\n([\s\S]*?)```/)?.[1];
+    expect(example).toBeDefined();
+    expect(() => parseFlow(example!)).not.toThrow();
+    // Every name the executor refuses has to be named here, or an author meets
+    // it for the first time as a run-time refusal.
+    for (const name of reservedScriptEnvNamesForMessage().split(", ")) {
+      expect(section, name).toContain(name);
+    }
+    // And the precedence, which is what a reader comes to this section for.
+    for (const layer of ["scripts.env.allow", "--env", "not a default"]) {
+      expect(section).toContain(layer);
     }
   });
 

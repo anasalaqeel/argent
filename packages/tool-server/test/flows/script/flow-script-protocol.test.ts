@@ -432,8 +432,17 @@ describe("flow script executor — the runner's reporting path survives the scri
   });
 });
 
-describe("flow script executor — redacting a document from a runner", () => {
-  it("scrubs a document too deep for a recursive walk", async () => {
+describe("flow script executor — a document from a runner", () => {
+  // The document came from a child that ran arbitrary code, so the parent's own
+  // walk over it — `findOwnProtoKey`, the last check before the document is
+  // committed — must be iterative: a megabyte of `{"nested":` is legal JSON,
+  // and a recursive walk would overflow the stack inside a call that owes its
+  // caller a verdict rather than a throw.
+  //
+  // A resolved secret inside the document is NOT replaced. The document is the
+  // script's answer, read by later steps for the value it holds, and the only
+  // redaction a step gets is over its failure text.
+  it("commits a document too deep for a recursive walk, as the script wrote it", async () => {
     const depth = 20_000;
     let json = JSON.stringify("token sk-live-9d3f0a1b2c3d4e5f");
     for (let i = 0; i < depth; i++) json = `{"nested":${json}}`;
@@ -448,7 +457,7 @@ describe("flow script executor — redacting a document from a runner", () => {
     expect(result.failure).toBeUndefined();
     let node: unknown = result.output;
     for (let i = 0; i < depth; i++) node = (node as Record<string, unknown>).nested;
-    expect(node).toBe("token {{secret:TOKEN}}");
+    expect(node).toBe("token sk-live-9d3f0a1b2c3d4e5f");
   }, 30_000);
 });
 
