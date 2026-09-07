@@ -378,15 +378,11 @@ async function recoverBlockedGlobalInstall(opts: {
       `nowhere writable to install into:\n${err}`;
     await failWith(withRemedies(cause, [localInstallRemedy(remedies)]));
   }
-  spinner.stop(`npm prefix set to ${prefix}.`);
-  // The write outlives this run whether or not the install ahead succeeds, and
-  // it lands wherever npm's user config resolves — not always `~/.npmrc`.
-  p.log.info(
-    pc.dim(
-      `Recorded in ${npmUserConfigPath()} — future global installs land there too. ` +
-        `Undo later with ${pc.cyan("npm config delete prefix")}.`
-    )
-  );
+  // Everything below asks npm again, and each question can sit for the full
+  // query timeout — a slow npm being the reason this run is here at all. Under
+  // the spinner, not in silence after it.
+  spinner.message(`Checking ${prefix}...`);
+  const configPath = npmUserConfigPath();
   forgetInheritedNpmPrefix();
 
   // Confirm rather than assume: a prefix npm accepted but still cannot write to
@@ -395,6 +391,7 @@ async function recoverBlockedGlobalInstall(opts: {
   // back through the step that just ran.
   const moved = probeGlobalInstallTarget(pm);
   if (moved?.blocked) {
+    spinner.stop(pc.red(`${prefix} is not writable either.`));
     await failWith(
       withRemedies(blockedGlobalTargetCause(moved, pm, "install"), [
         ownableRemedy(moved.dir, moved.root),
@@ -403,8 +400,19 @@ async function recoverBlockedGlobalInstall(opts: {
     );
   }
   // npmGlobalBinDir over path.join: one answer for where npm links its commands,
-  // and the prefix write above is what it now reports.
-  return { local: false, binDir: npmGlobalBinDir() ?? path.join(prefix, "bin") };
+  // and the prefix write above is what it reports.
+  const binDir = npmGlobalBinDir() ?? path.join(prefix, "bin");
+
+  spinner.stop(`npm prefix set to ${prefix}.`);
+  // The write outlives this run whether or not the install ahead succeeds, and
+  // it lands wherever npm's user config resolves — not always `~/.npmrc`.
+  p.log.info(
+    pc.dim(
+      `Recorded in ${configPath} — future global installs land there too. ` +
+        `Undo later with ${pc.cyan("npm config delete prefix")}.`
+    )
+  );
+  return { local: false, binDir };
 }
 
 /**

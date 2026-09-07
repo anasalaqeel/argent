@@ -19,7 +19,7 @@ import {
   npmGlobalBinDir,
 } from "../src/global-prefix.js";
 import { InitCancelled } from "../src/init-args.js";
-import { log, select } from "@clack/prompts";
+import { log, select, spinner } from "@clack/prompts";
 import { track } from "@argent/telemetry";
 import { INSTALL_GLOBAL_PREFIX_UNWRITABLE, type InitTelemetry } from "../src/init-telemetry.js";
 
@@ -367,6 +367,38 @@ describe("a global install whose target directory cannot be written", () => {
     // the Summary prints.
     expect(outcome.pathHint).toBe(binDir);
     expect(decisions()).toEqual(["set_prefix", "install"]);
+  });
+
+  // Each question after the move is a subprocess that can sit for the full
+  // query timeout, and a stopped spinner reads as "this step is done" — so a
+  // slow npm would show as dead air with nothing running.
+  it("keeps the spinner up while it asks npm where the moved prefix put things", async () => {
+    vi.mocked(select).mockResolvedValue("prefix" as never);
+    vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+
+    // Nothing in this file clears mock call records between tests, so only the
+    // calls this run added are the ones to order.
+    const spinners = vi.mocked(spinner).mock.results.length;
+    const binDirQueries = vi.mocked(npmGlobalBinDir).mock.invocationCallOrder.length;
+
+    await globalInstall(makeTel());
+
+    const settled = vi
+      .mocked(spinner)
+      .mock.results.slice(spinners)
+      .flatMap((result) => (result.type === "return" ? [vi.mocked(result.value.stop)] : []))
+      .find((stop) =>
+        stop.mock.calls.some(([message]) => String(message).includes("npm prefix set to"))
+      );
+    const settledAt = settled!.mock.invocationCallOrder[0];
+    // The re-probe is the last thing to ask where a global install would land.
+    expect(vi.mocked(probeGlobalInstallTarget).mock.invocationCallOrder.at(-1)).toBeLessThan(
+      settledAt
+    );
+    expect(vi.mocked(npmGlobalBinDir).mock.invocationCallOrder[binDirQueries]).toBeLessThan(
+      settledAt
+    );
   });
 
   it("stops when the moved prefix can be written but its bin directory cannot", async () => {
