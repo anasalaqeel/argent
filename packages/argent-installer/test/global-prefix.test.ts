@@ -3,12 +3,18 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-const { mockExecFileSync, mockAccessSync } = vi.hoisted(() => ({
+const { mockExecFileSync, mockExecSync, mockAccessSync } = vi.hoisted(() => ({
   mockExecFileSync: vi.fn(),
+  // `which -a argent`, behind topology's getGlobalBinaryPath. Undefined output
+  // is what "not on PATH" looks like from there.
+  mockExecSync: vi.fn(),
   mockAccessSync: vi.fn(),
 }));
 
-vi.mock("node:child_process", () => ({ execFileSync: mockExecFileSync }));
+vi.mock("node:child_process", () => ({
+  execFileSync: mockExecFileSync,
+  execSync: mockExecSync,
+}));
 
 // The real one, past the mock above: a printed shell command is only proven by a
 // shell parsing it.
@@ -29,6 +35,8 @@ import {
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   isNixStorePath,
+  globalInstallPresent,
+  npmGlobalPackageRoot,
   blockedGlobalBinDir,
   npmGlobalBinDir,
   npmGlobalPackagePath,
@@ -670,6 +678,114 @@ describe("a package manager's answer argent cannot use", () => {
     expect(npmGlobalBinDir()).toBeNull();
     expect(npmGlobalPackagePath()).toBeNull();
     expect(probeGlobalInstallTarget("npm")).toBeNull();
+  });
+
+  // The one failure the npm fallback exists for, and the shape it really takes:
+  // npm exits 0 and its answer is unusable, so the copy on disk is all that is
+  // left. A query that throws is a different, rarer path.
+  it("falls back to the installed package when npm redacted its own prefix", () => {
+    mockExecFileSync.mockReturnValue("/private/tmp/scratch/***/prefix\n");
+    const packageDir = path.join(tmpRoot, "lib", "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(packageDir, { recursive: true });
+
+    expect(probeGlobalInstallTarget("npm", packageDir)?.dir).toBe(path.dirname(packageDir));
+  });
+});
+
+describe("npmGlobalPackageRoot", () => {
+  /** What `npm root -g` names, with argent installed under it. */
+  const installGlobally = (manifest: unknown): string => {
+    const globalDir = path.join(tmpRoot, "lib", "node_modules");
+    const packageDir = path.join(globalDir, "@swmansion", "argent");
+    fs.mkdirSync(packageDir, { recursive: true });
+    if (manifest !== null) {
+      fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify(manifest));
+    }
+    mockExecFileSync.mockReturnValue(`${globalDir}\n`);
+    return packageDir;
+  };
+
+  it("names the directory npm holds argent in", () => {
+    const packageDir = installGlobally({ name: "@swmansion/argent", version: "0.24.0" });
+
+    expect(npmGlobalPackageRoot()).toBe(fs.realpathSync(packageDir));
+  });
+
+  it("follows the link npm made, so the answer is the directory that has the files", () => {
+    const globalDir = path.join(tmpRoot, "lib", "node_modules");
+    const real = path.join(tmpRoot, "store", "argent");
+    fs.mkdirSync(path.join(globalDir, "@swmansion"), { recursive: true });
+    fs.mkdirSync(real, { recursive: true });
+    fs.writeFileSync(
+      path.join(real, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent" })
+    );
+    fs.symlinkSync(real, path.join(globalDir, "@swmansion", "argent"));
+    mockExecFileSync.mockReturnValue(`${globalDir}\n`);
+
+    expect(npmGlobalPackageRoot()).toBe(fs.realpathSync(real));
+  });
+
+  // A half-removed directory is not an install. Counting one answers "is argent
+  // still here" with yes forever.
+  it("does not count a leftover directory with no manifest", () => {
+    installGlobally(null);
+
+    expect(npmGlobalPackageRoot()).toBeNull();
+  });
+
+  it("does not count a directory holding some other package", () => {
+    installGlobally({ name: "@swmansion/something-else", version: "1.0.0" });
+
+    expect(npmGlobalPackageRoot()).toBeNull();
+  });
+
+  it("is null when npm cannot be asked", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("npm not found");
+    });
+
+    expect(npmGlobalPackageRoot()).toBeNull();
+  });
+});
+
+describe("globalInstallPresent", () => {
+  // The state the prefix recovery leaves behind: npm installed it, and no shell
+  // knows about the bin directory yet.
+  it("counts an install npm holds that PATH cannot see", () => {
+    const globalDir = path.join(tmpRoot, "lib", "node_modules");
+    const packageDir = path.join(globalDir, "@swmansion", "argent");
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent" })
+    );
+    mockExecFileSync.mockReturnValue(`${globalDir}\n`);
+    mockExecSync.mockImplementation(() => {
+      throw new Error("argent not found");
+    });
+
+    expect(globalInstallPresent()).toBe(true);
+  });
+
+  it("counts an install only PATH can see", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("npm not found");
+    });
+    mockExecSync.mockReturnValue("/usr/local/bin/argent\n");
+
+    expect(globalInstallPresent()).toBe(true);
+  });
+
+  it("is false when neither PATH nor npm has one", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("npm not found");
+    });
+    mockExecSync.mockImplementation(() => {
+      throw new Error("argent not found");
+    });
+
+    expect(globalInstallPresent()).toBe(false);
   });
 });
 
