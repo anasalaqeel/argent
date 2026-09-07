@@ -78,31 +78,36 @@ describe("screenshotDiffTool", () => {
       ["Captured at full\u2011resolution.", true],
       ["Kept at the device\u2019s resolution.", true],
       ["h264 frames stay at native resolution.", false],
-      ["Argent records at the device's native resolution.", false],
       // The exemption covers every arm, not only the `native` one: these three
       // are as true of a recording as the row above, and reach the vocabulary
       // through CLAIMS_SIZE_PLAIN instead.
       ["The mp4 frames are not downscaled.", false],
-      ["Recorded frames are unscaled.", false],
-      ["Each recorded frame is written at its original size.", false],
-      // …and it excuses only a sentence with nothing else in it to be about: a
-      // recording token beside the name of a still artifact is a screenshot
-      // claim wearing a recording verb. One row per name, because a sentence
-      // carrying two is satisfied by either. The table is the shape that forces
-      // it — `claimsIn` hands one over whole, so a recording row must not excuse
-      // the row beside it.
-      ["Record it at full resolution, then keep the screenshot.", true],
-      ["Record it at full resolution, then keep the png.", true],
-      ["Record it at full resolution, then keep the baseline.", true],
-      ["Record it at full resolution, then keep the snapshot.", true],
-      ["Record it at full resolution, then keep the diff.", true],
+      ["The recording is unscaled.", false],
+      ["Each video is written at its original size.", false],
+      ["It runs at 30 fps at native resolution.", false],
+      ["The h264 stream is not downscaled.", false],
+      // …while the words a recording surface uses for its own output are not
+      // evidence of a still, or the carve-out would un-exempt what it is for.
+      ["The recording captures frames at full resolution.", false],
+      // The verb is not the artifact: `record` means recording a *flow* almost
+      // everywhere it appears in the swept corpus. The second row is the one
+      // sentence in the corpus that ever needed the exemption, in the spelling
+      // it had before it was made to name its own subject.
+      ["Record the screen at full resolution.", true],
+      ["Argent records at the device's native resolution.", true],
+      // …and a recording named beside a still artifact is a claim about the
+      // still. One row per name, because a sentence carrying two is satisfied by
+      // either. The table is the shape that forces it — `claimsIn` hands one
+      // over whole, so a recording row must not excuse the row beside it.
+      ["The recording runs while the screenshot is kept at full resolution.", true],
+      ["The recording runs while the png is kept at full resolution.", true],
+      ["The recording runs while the baseline is kept at full resolution.", true],
+      ["The recording runs while the snapshot is kept at full resolution.", true],
+      ["The recording runs while the diff is kept at full resolution.", true],
       [
         "| `screen-recording-start` | Start recording to an h264 mp4 | | `screenshot` | Capture the screen at full resolution |",
         true,
       ],
-      // …while the words a recording surface uses for its own output are not
-      // evidence of a still, or the carve-out would un-exempt what it is for.
-      ["The recording captures frames at full resolution.", false],
       ["`scale` accepts values from 0.01 to 1.0.", false],
       // The value is matched to the end of the number: `\b` falls between the
       // `1` and the `.`, so these read as `scale: 1`. A `.` that ends a sentence

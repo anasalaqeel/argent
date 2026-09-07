@@ -67,18 +67,19 @@ const CLAIMS_NATIVE =
  * covers every arm rather than only `native` — the claim is as true written
  * "the mp4 frames are not downscaled" as written "at native resolution".
  *
- * It excuses only a sentence with nothing else in it to be about. A recording
- * token is not enough on its own: "record the baseline with `screenshot` at
- * full resolution" is a screenshot claim wearing a recording verb, and
- * `claimsIn` hands a whole markdown table over as one sentence, so one
- * recording row would otherwise excuse every row beside it.
+ * Keyed on the recording, never on the verb `record`, which across the swept
+ * corpus almost always means recording a *flow* — over a hundred sentences in
+ * the flow-authoring pages alone, none of them about a video.
  *
- * The names of still artifacts only. `capture`, `frame`, `image`, `pixels` and
- * `resolution` are what a recording surface calls its own output, so a sweep
- * that read them as evidence of a still would un-exempt the very sentences the
- * carve-out exists for.
+ * A recording named beside a still artifact is a claim about the still, so the
+ * exemption also needs the sentence to have nothing else in it to be about:
+ * `claimsIn` hands a whole markdown table over as one sentence, and one
+ * recording row would otherwise excuse every row beside it. Still artifacts by
+ * name only — `capture`, `frame`, `image`, `pixels` and `resolution` are what a
+ * recording surface calls its own output, so reading them as evidence of a
+ * still would un-exempt the very sentences the carve-out exists for.
  */
-const ABOUT_A_RECORDING = /\brecord(?:s|ed|ing|ings)?\b|\bvideos?\b|\bh264\b|\bmp4\b|\bfps\b/i;
+const ABOUT_A_RECORDING = /\brecordings?\b|\bvideos?\b|\bh264\b|\bmp4\b|\bfps\b/i;
 const A_STILL_CAPTURE = /\b(?:screenshots?|pngs?|diffs?|baselines?|snapshots?)\b/i;
 
 const claimsSize = (sentence: string): boolean => {
