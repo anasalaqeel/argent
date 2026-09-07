@@ -374,6 +374,28 @@ const CASES = {
       target: '"cart" cropOn id=total',
     },
   ],
+  "script": [
+    {
+      step: { kind: "script", path: "scripts/seed.mjs" },
+      summary: "1. script: scripts/seed.mjs",
+      target: "scripts/seed.mjs",
+    },
+    {
+      // `timeout` changes what replays, so it rides the summary — the report
+      // target names only the file the step runs.
+      step: { kind: "script", path: "scripts/seed.mjs", timeout: 30000 },
+      summary: "1. script: scripts/seed.mjs (timeout 30000ms)",
+      target: "scripts/seed.mjs",
+    },
+    {
+      // A flow-relative path that climbs out of the flow's own directory: the
+      // as-written spelling reaches both surfaces unchanged, so the author can
+      // find the file the step names.
+      step: { kind: "script", path: "../shared/seed.mjs" },
+      summary: "1. script: ../shared/seed.mjs",
+      target: "../shared/seed.mjs",
+    },
+  ],
 } satisfies CaseTable;
 
 const CASE_LIST: [string, Case][] = Object.entries(CASES).flatMap(([kind, cases]) =>

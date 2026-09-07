@@ -405,6 +405,16 @@ const FLOW_STEP_DEFINITIONS: {
       return step.selector ? `${selectorLabel(step.selector)} (${by})` : by;
     },
   },
+  "script": {
+    // `path` is the as-written, flow-relative spelling (parseScriptPath rejects
+    // absolute and drive-relative forms), so both surfaces name the file the
+    // author would open. `timeout` rides the summary alone: it changes what
+    // replays, the way tap's `times` does, while a report target names only
+    // what the step acts on.
+    summary: (step) =>
+      `${step.path}${step.timeout !== undefined ? ` (timeout ${step.timeout}ms)` : ""}`,
+    target: (step) => step.path,
+  },
   "snapshot": {
     // `name` interpolates raw on both surfaces. It becomes a baseline filename,
     // so `parseFlow` gates it on FLOW_NAME_PATTERN (letters, digits, `_`, `-`)
