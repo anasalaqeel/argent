@@ -53,18 +53,18 @@ export interface KeyboardResult {
    *   to a one-character backspace. On a level that HAS the subcommand it also
    *   reads the field back afterwards and deletes whatever the select-all left
    *   behind, so a swallowed chord over a single-line field it can read does
-   *   not leave that field one character shorter under a `cleared: true`. Four
-   *   things escape the repair, and it is skipped silently in each: the
-   *   read-back rides the screen's view hierarchy, so a screen it cannot
-   *   capture — or a clear whose earlier legs already spent the budget the read
-   *   needs — degrades to best-effort like iOS; it measures focused `EditText`
-   *   nodes only, so a password box, a WebView input or a custom widget gets no
-   *   repair, and one of those focused ANYWHERE on screen (another window's
-   *   credential box) discards the reading for the target too, since the walk
-   *   cannot tell which focused editable was meant; a field reported as holding
-   *   exactly its own placeholder is read as empty, so a value that happens to
-   *   equal the placeholder is left alone; and the repair deletes backwards from
-   *   end-of-LINE, so a multi-line field keeps what sits below the caret.
+   *   not leave that field one character shorter under a `cleared: true`. Three
+   *   things skip the repair silently: the read-back rides the screen's view
+   *   hierarchy, so a screen it cannot capture — or a clear whose earlier legs
+   *   already spent the budget the read needs — degrades to best-effort like
+   *   iOS; it measures focused `EditText` nodes only, so a password box, a
+   *   WebView input or a custom widget gets no repair, and one of those focused
+   *   ANYWHERE on screen (another window's credential box) discards the reading
+   *   for the target too, since the walk cannot tell which focused editable was
+   *   meant; and a field reported as holding exactly its own placeholder is read
+   *   as empty, so a value that happens to equal the placeholder is left alone.
+   *   A fourth limits it rather than skipping it: the repair deletes backwards
+   *   from end-of-LINE, so a multi-line field keeps what sits below the caret.
    * - The iOS HID transport is fire-and-forget and cannot read the field at
    *   all: `cleared: true` means the chord was dispatched, nothing more.
    *

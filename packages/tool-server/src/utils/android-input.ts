@@ -415,21 +415,18 @@ export async function injectAndroidClear(
   // clear taken where `measureFocusedTextLength` cannot see.
   //
   // `readBack` carries that rule down to the two readings that look positive
-  // over an empty field. A focused password field floors to BLIND_DELETE_COUNT
-  // (see the measurement), so a successful clear of a credential box would
-  // otherwise read 150 back and fire the delete run into the field it just
-  // emptied; and an empty field's hint rides the same `text` attribute as its
-  // value, so a placeholder would be deleted as residue — 24 keys into an
-  // emptied Settings search box, or, past MAX_DELETE_COUNT, the length refusal
-  // over a clear that worked.
+  // over an empty field: a focused password field floors to BLIND_DELETE_COUNT,
+  // and an empty field's hint rides the same `text` attribute as its value.
+  // Either fires the delete run into the field this clear just emptied — or,
+  // past MAX_DELETE_COUNT, the length refusal over a clear that worked. What
+  // the flag changes is on the measurement.
   //
-  // Two shapes the rescue does not cover, both still reported as cleared: the
-  // measurement counts focused `EditText` nodes only, so an editable the dump
-  // reports as anything else — a WebView input, a fully custom widget — reads
-  // as unreadable and no rescue follows at all; and the rescue is
-  // `clearByDeleting`, whose `KEYCODE_MOVE_END` is end-of-LINE, so a multi-line
-  // field is emptied only down to the end of the caret's line. Both are on the
-  // `clear` parameter and the `cleared` docstring.
+  // Two shapes the rescue does not cover, both still reported as cleared: an
+  // editable the dump reports as anything but an `EditText` — a WebView input,
+  // a custom widget — reads as unreadable and gets no rescue; and
+  // `clearByDeleting`'s `KEYCODE_MOVE_END` is end-of-LINE, so a multi-line field
+  // is emptied only down to the end of the caret's line. Both are on the `clear`
+  // parameter and the `cleared` docstring.
   const residue = await measureFocusedTextLength(serial, deadline, options.readHierarchy, true);
   if (residue !== undefined && residue > 0) {
     await clearByDeleting(serial, deadline, options, residue);
@@ -897,21 +894,17 @@ async function measureFocusedTextLength(
     // keeps `longest` monotonic, which is what makes the "over-deleting is a
     // no-op, under-deleting truncates" rule above actually hold.
     //
-    // `readBack` opts out of the floor, because there the reading decides only
-    // whether a rescue runs and a floored password field would read as residue
-    // over a field that is empty. The ambiguity must not delete, so ANY
-    // unmeasurable focused editable makes the whole reading undefined — evidence
-    // of nothing, like a failed dump. Any, not just the target's: the walk
-    // cannot tell which focused editable the caller meant, so one it cannot read
-    // is enough to make the answer unusable.
+    // `readBack` opts out of the floor: there a floored password field reads as
+    // residue over a field that is empty, and the ambiguity must not delete. ANY
+    // unmeasurable focused editable poisons the reading, not just the target's —
+    // the walk cannot tell which one the caller meant.
     const text = attrIsTrue(attrs, "password") ? undefined : attrs.text;
     if (text === undefined) anyUnmeasurable = true;
-    // A field reported as holding exactly its own hint is empty: uiautomator
-    // renders a placeholder into `text`, and a value that happens to equal the
-    // placeholder is not a shape worth deleting for. Only the read-back applies
-    // it. The sizing read must not: there a missed character truncates the
-    // field, and the levels it serves emit no `hint` to check against anyway.
-    const placeholder = readBack && text !== undefined && text !== "" && text === attrs.hint;
+    // uiautomator renders an empty field's placeholder into `text`, so a `text`
+    // equal to its own `hint` is an empty field. Read-back only: for the sizing
+    // read a missed character truncates the field, and API 30 emits no `hint`
+    // to check against anyway.
+    const placeholder = readBack && text !== undefined && text === attrs.hint;
     longest = Math.max(
       longest ?? 0,
       text === undefined ? BLIND_DELETE_COUNT : placeholder ? 0 : [...text].length
