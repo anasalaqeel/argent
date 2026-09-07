@@ -508,6 +508,20 @@ describe("redactSecretsFromError", () => {
     expect(err.stack ?? "").not.toContain("hunter2");
     expect(err.stack ?? "").toContain("{{secret:APP_PASSWORD}}");
   });
+
+  it("redacts the same way whatever order the secrets arrive in", () => {
+    const host = { name: "HOST", value: "api.example.com" };
+    const url = { name: "URL", value: "https://api.example.com/v1/tok-9d3f0a1b2c" };
+    const text = `calling ${url.value} now`;
+    for (const order of [
+      [host, url],
+      [url, host],
+    ]) {
+      const err = new Error(text);
+      redactSecretsFromError(err, order);
+      expect(err.message).toBe("calling {{secret:URL}} now");
+    }
+  });
 });
 
 describe("keyboard tool with secret placeholders", () => {

@@ -211,6 +211,7 @@ export function stepRequiresDevice(registry: Registry, step: FlowStep): boolean 
   switch (step.kind) {
     case "echo":
     case "wait":
+    case "script":
       return false;
     case "tool":
       return toolRequiresDevice(registry, step.name);

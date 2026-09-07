@@ -83,6 +83,7 @@ interface IdleResult {
 
 const capability: ToolCapability = {
   apple: { simulator: true, device: true },
+  appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
   harmony: { device: true },
@@ -133,7 +134,10 @@ export function createAwaitScreenIdleTool(registry: Registry): ToolDefinition<Pa
     androidIsTv: boolean,
     budgetMs: number
   ): Promise<DescribeTreeData> {
-    if (device.platform === "ios") {
+    // ios-remote reads the same AX tree through describeIos: the ax-service
+    // blueprint routes it over the sim-remote tunnel, so only the preflight dep
+    // differs from the local branch. `isTvOs` is false for it, matching describe.
+    if (device.platform === "ios" || device.platform === "ios-remote") {
       // Physical devices poll the same XCUITest runner snapshot as describe.
       if (device.kind === "device") {
         return describeIosDevice(registry, device);
@@ -187,6 +191,7 @@ Use after a launch/navigation to wait for the UI to render before screenshotting
       const device = resolveDevice(params.udid);
       assertSupported(AWAIT_SCREEN_IDLE_TOOL_ID, capability, device);
       if (device.platform === "ios") await ensureDeps(iosRequires);
+      else if (device.platform === "ios-remote") await ensureDeps(["sim-remote"]);
       else if (device.platform === "android") await ensureDeps(androidRequires);
       else if (device.platform === "harmony") await ensureDeps(harmonyRequires);
 

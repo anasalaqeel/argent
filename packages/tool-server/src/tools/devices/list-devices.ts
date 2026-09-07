@@ -18,6 +18,7 @@ import {
   filterVvdShadowsFromAndroid,
   type VegaDevice,
 } from "../../utils/vega-devices";
+import { listExternalDevices, type ExternalDevice } from "../../utils/external-devices";
 type IosDevice = IosSimulator & { platform: "ios" };
 
 /**
@@ -88,18 +89,57 @@ type HarmonyDevice = {
   connection?: string | null;
 };
 
-type ListDevicesResult = {
-  devices: Array<
-    | IosDevice
-    | IosPhysicalDevice
-    | IosRemoteDevice
-    | AndroidDevice
-    | ChromiumDevice
-    | VegaDevice
-    | HarmonyDevice
-  >;
-  avds: Array<{ name: string }>;
+/**
+ * A device an external provider is sharing. It carries a neutral `id` plus the
+ * platform's conventional key (`udid` / `serial`), so an agent that learned
+ * "iOS entries use udid" is not surprised. `provider` is deliberately visible:
+ * it lets an agent pick the device belonging to its own project, and routes
+ * bug reports to the right tracker.
+ */
+type ExternalListedDevice = {
+  capabilities: string[];
+  external: true;
+  id: string;
+  kind: "device" | "emulator" | "simulator";
+  name: string;
+  platform: "android" | "ios";
+  provider: { id: string; name: string; workspace?: { name: string; path: string } };
+  serial?: string;
+  state: string;
+  udid?: string;
 };
+
+type ListedDevice =
+  | AndroidDevice
+  | ChromiumDevice
+  | ExternalListedDevice
+  | HarmonyDevice
+  | IosDevice
+  | IosPhysicalDevice
+  | IosRemoteDevice
+  | VegaDevice;
+
+type ListDevicesResult = {
+  devices: ListedDevice[];
+  avds: Array<{ name: string }>;
+  /**
+   * Rules for a provider's device, present only when one is listed. Most
+   * installs have no provider and the description is read once per session, so
+   * a provider appearing later would miss it. This is re-read per call.
+   */
+  hint?: string;
+};
+
+/** Only what differs from a device argent booted itself. */
+const EXTERNAL_DEVICES_HINT =
+  `Some entries are tagged 'external: true': another application is already driving that device, ` +
+  `and its 'provider' field names it ('provider.workspace' names the project it opened, when it published one). ` +
+  `Drive them with the usual tools, by the 'ext:'-prefixed id. Two rules differ: prefer the external device whose ` +
+  `'provider.workspace.path' matches the project you are working in, and do NOT call boot-device on them, since the ` +
+  `provider owns their lifecycle. stop-simulator-server IS safe on them and never stops the provider's server — it ` +
+  `drops argent's cached handles, which is the recovery when calls keep failing against an endpoint the provider has ` +
+  `since moved. Each entry's 'capabilities' lists the mechanisms that provider granted; a tool relying on one it ` +
+  `withheld fails with a clear message naming the provider.`;
 
 function sortIos(a: IosDevice, b: IosDevice): number {
   const aBooted = a.state === "Booted" ? 0 : 1;
@@ -121,16 +161,12 @@ function sortAndroid(a: AndroidDevice, b: AndroidDevice): number {
 
 // Floats booted/ready devices to the top across platforms; the merged array is
 // otherwise ordered iOS-first.
-function readinessRank(
-  d:
-    | IosDevice
-    | IosPhysicalDevice
-    | IosRemoteDevice
-    | AndroidDevice
-    | ChromiumDevice
-    | VegaDevice
-    | HarmonyDevice
-): number {
+function readinessRank(d: ListedDevice): number {
+  // Providers only advertise devices they are driving, each naming the state in
+  // its own platform's vocabulary, so accept every "ready" spelling.
+  if ("external" in d) {
+    return d.state === "Booted" || d.state === "device" || d.state === "running" ? 0 : 1;
+  }
   if (d.platform === "android") return d.state === "device" ? 0 : 1;
   if (d.platform === "vega") return d.state === "running" || d.state === "device" ? 0 : 1;
   if (d.platform === "chromium") return 0; // Chromium entries are only listed when their CDP is responsive
@@ -231,6 +267,40 @@ export async function withDeadline<T>(p: Promise<T>, fallback: T, label: string)
   }
 }
 
+function toListedExternal(device: ExternalDevice): ExternalListedDevice {
+  return {
+    capabilities: Array.from(device.capabilities).sort(),
+    external: true,
+    id: device.id,
+    kind: device.kind,
+    name: device.name,
+    platform: device.platform,
+    provider: {
+      id: device.provider.id,
+      name: device.provider.name,
+      ...(device.provider.workspace ? { workspace: device.provider.workspace } : {}),
+    },
+    state: device.state,
+    /** Mirror the id into the key the agent associates with the platform. */
+    ...(device.platform === "ios" ? { udid: device.id } : { serial: device.id }),
+  };
+}
+
+/**
+ * Native ids a provider is currently claiming.
+ *
+ * The same device reaches this tool twice whenever the platform's own
+ * discovery can also see it: `adb devices` always sees a provider's emulator,
+ * and `simctl` sees its simulators once the provider's device set is listed in
+ * `ios.additionalDeviceSets`. Drop the plain row in both cases, the external
+ * entry is the one carrying the provider's attribution and capability grants,
+ * and driving the bare id would spawn a second simulator-server against a
+ * device already in use.
+ */
+function externalShadowIds(external: readonly ExternalDevice[]): Set<string> {
+  return new Set(external.map((device) => device.nativeId));
+}
+
 const zodSchema = z.object({});
 
 export const listDevicesTool: ToolDefinition<Record<string, never>, ListDevicesResult> = {
@@ -264,62 +334,89 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
     // the "no branch can hang the fan-out" guarantee universal. The deadline only
     // substitutes a fallback on *slowness*; a rejection still propagates, so the
     // `.catch(() => [])` wrappers (and the lack of one on iOS/AVDs) are unchanged.
-    const [ios, iosPhysical, iosRemote, android, avds, chromium, vega, harmony, harmonyTargets] =
-      await Promise.all([
-        withDeadline(listIosSimulators(), [], "ios"),
-        withDeadline(
-          listIosPhysicalDevices().catch(() => []),
-          [],
-          "ios-physical"
+    const [
+      ios,
+      iosPhysical,
+      iosRemote,
+      android,
+      avds,
+      chromium,
+      vega,
+      harmony,
+      harmonyTargets,
+      external,
+    ] = await Promise.all([
+      withDeadline(listIosSimulators(), [], "ios"),
+      withDeadline(
+        listIosPhysicalDevices().catch(() => []),
+        [],
+        "ios-physical"
+      ),
+      withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
+      withDeadline(
+        // list-devices is the one caller that surfaces TV vs mobile, so it pays for
+        // runtimeKind's extra per-device probe. The explicit `adb devices` bound
+        // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
+        listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
+          () => []
         ),
-        withDeadline(listRemoteIosSimulators(), [], "ios-remote"),
-        withDeadline(
-          // list-devices is the one caller that surfaces TV vs mobile, so it pays for
-          // runtimeKind's extra per-device probe. The explicit `adb devices` bound
-          // (not runAdb's 30s default) keeps this branch under BRANCH_DEADLINE_MS.
-          listAndroidDevices({ runtimeKind: true, devicesTimeoutMs: ADB_DEVICES_TIMEOUT_MS }).catch(
-            () => []
-          ),
-          [],
-          "android"
-        ),
-        withDeadline(listAvds(), [], "avds"),
-        withDeadline(
-          discoverChromiumDevices().catch(() => []),
-          [],
-          "chromium"
-        ),
-        withDeadline(
-          listVegaDevices().catch(() => []),
-          [],
-          "vega"
-        ),
-        withDeadline(
-          listHarmonyInstances().catch(() => []),
-          [],
-          "harmony"
-        ),
-        withDeadline(
-          listHarmonyHdcTargets().catch(() => []),
-          [],
-          "harmony-hdc"
-        ),
-      ]);
-    const iosTagged: IosDevice[] = ios.map((s) => ({ platform: "ios", ...s }));
+        [],
+        "android"
+      ),
+      withDeadline(listAvds(), [], "avds"),
+      withDeadline(
+        discoverChromiumDevices().catch(() => []),
+        [],
+        "chromium"
+      ),
+      withDeadline(
+        listVegaDevices().catch(() => []),
+        [],
+        "vega"
+      ),
+      withDeadline(
+        listHarmonyInstances().catch(() => []),
+        [],
+        "harmony"
+      ),
+      withDeadline(
+        listHarmonyHdcTargets().catch(() => []),
+        [],
+        "harmony-hdc"
+      ),
+      /**
+       * One directory stat when no provider is registered (the common case)
+       * and a short HTTP probe per provider otherwise.
+       */
+      withDeadline(
+        listExternalDevices().catch(() => []),
+        [],
+        "external"
+      ),
+    ]);
+
+    const externalShadows = externalShadowIds(external);
+
+    const iosTagged: IosDevice[] = ios
+      .filter((simulator) => !externalShadows.has(simulator.udid))
+      .map((simulator) => ({ platform: "ios", ...simulator }));
+
     iosTagged.sort(sortIos);
-    const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical.map((d) => ({
-      platform: "ios",
-      kind: "device",
-      udid: d.udid,
-      name: d.name,
-      state: d.transportType === "wired" ? "connected" : "paired",
-      runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
-      model: d.model,
-      developerModeEnabled: d.developerModeEnabled,
-      pairingState: d.pairingState,
-      transportType: d.transportType,
-      tunnelState: d.tunnelState,
-    }));
+    const iosPhysicalTagged: IosPhysicalDevice[] = iosPhysical
+      .filter((d) => !externalShadows.has(d.udid))
+      .map((d) => ({
+        platform: "ios",
+        kind: "device",
+        udid: d.udid,
+        name: d.name,
+        state: d.transportType === "wired" ? "connected" : "paired",
+        runtime: d.osVersion ? `iOS ${d.osVersion} (physical device)` : "iOS (physical device)",
+        model: d.model,
+        developerModeEnabled: d.developerModeEnabled,
+        pairingState: d.pairingState,
+        transportType: d.transportType,
+        tunnelState: d.tunnelState,
+      }));
     iosRemote.sort(sortIosRemote);
     const androidTagged: AndroidDevice[] = android.map((d) => ({
       platform: "android",
@@ -332,9 +429,11 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       sdkLevel: d.sdkLevel,
       runtimeKind: d.runtimeKind,
     }));
-    // Drop a running VVD's adb shadow row so it appears only once (as vega).
+    // Drop a running VVD's adb shadow row so it appears only once (as vega),
+    // and likewise any serial an external provider has claimed.
     const vvdShadowSerials = await resolveVvdShadowAdbSerials(androidTagged, vega);
-    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, vvdShadowSerials);
+    const shadowSerials = new Set([...vvdShadowSerials, ...externalShadows]);
+    const androidDeduped = filterVvdShadowsFromAndroid(androidTagged, shadowSerials);
     androidDeduped.sort(sortAndroid);
 
     const harmonyTagged: HarmonyDevice[] = [
@@ -361,15 +460,7 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       ),
     ];
 
-    const devices: Array<
-      | IosDevice
-      | IosPhysicalDevice
-      | IosRemoteDevice
-      | AndroidDevice
-      | ChromiumDevice
-      | VegaDevice
-      | HarmonyDevice
-    > = [
+    const devices: ListedDevice[] = [
       ...iosTagged,
       ...iosPhysicalTagged,
       ...iosRemote,
@@ -377,9 +468,10 @@ Booted/ready devices are listed first. Platforms whose CLI is unavailable are si
       ...chromium,
       ...vega,
       ...harmonyTagged,
+      ...external.map(toListedExternal),
     ];
     devices.sort((a, b) => readinessRank(a) - readinessRank(b));
 
-    return { devices, avds };
+    return { devices, avds, ...(external.length > 0 ? { hint: EXTERNAL_DEVICES_HINT } : {}) };
   },
 };
