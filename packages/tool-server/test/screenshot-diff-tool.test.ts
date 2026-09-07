@@ -66,6 +66,19 @@ describe("screenshotDiffTool", () => {
       ["The baseline is captured at 1x.", true],
       ["The capture is at 1.0 scale.", true],
       ["The tool will rescale to 1.0 before diffing.", true],
+      // One row per subject spelling, since the subject gate is an alternation
+      // too: a row naming two of them is satisfied by either and pins neither.
+      ["The screenshot is full-size.", true],
+      ["Captured at full-size.", true],
+      ["Capturing at full-size.", true],
+      ["The image is full-size.", true],
+      ["The png is full-size.", true],
+      ["The frame is full-size.", true],
+      ["The diff is full-size.", true],
+      ["The baseline is full-size.", true],
+      ["The snapshot is full-size.", true],
+      ["The screen is full-size.", true],
+      ["The resolution is 1:1.", true],
       // The subject can be the result field itself. `_` is a word character and
       // a camelCase hump is not a boundary, so the words inside these
       // identifiers are invisible to a `\b`-delimited alternative — and the
