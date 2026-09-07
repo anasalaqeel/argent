@@ -564,6 +564,15 @@ describe("screenshotDiffTool", () => {
     expect(screenshotDiffTool.description).toContain(
       "diffPath is the diff at the size the comparison ran at"
     );
+    // Naming the fields is as far as it goes. Over MCP the result reaches the
+    // agent as the summary text beside the inlined context image, with no field
+    // of either name to read (#826), so a description that sends it to fetch
+    // the images' paths out of the result sends it after nothing.
+    expect(
+      agentFacingText(screenshotDiffTool)
+        .map(([, text]) => text)
+        .join("\n")
+    ).not.toMatch(/result carries[^.]*paths?|paths?[^.]*in (?:this|the) result/i);
     // A positive phrase leaves room for a contradicting sentence beside it, so
     // pin the whole collection instead. Over the whole catalogue: the claim
     // moves between the two tools that make it — `screenshot` captures the
