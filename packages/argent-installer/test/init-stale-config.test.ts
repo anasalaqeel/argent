@@ -4,6 +4,8 @@ import * as path from "node:path";
 import * as os from "node:os";
 import { getAdapterByName } from "../src/mcp-configs.js";
 import { cleanupStaleMcpConfigs } from "../src/init-stale-config.js";
+import { isGloballyInstalled } from "../src/utils.js";
+import { npmGlobalPackageRoot } from "../src/global-prefix.js";
 
 // ── homedir mock ──────────────────────────────────────────────────────────────
 // Same pattern as mcp-configs.test.ts: redirect homedir() to a temp path so
@@ -29,9 +31,9 @@ vi.mock("node:os", async (importOriginal) => {
 // isGloballyInstalled; pin it per test instead of depending on whether the
 // machine running the suite has argent installed.
 let globallyInstalled = false;
-// npm's separate answer, which globalInstallPresent falls back on: an install
-// under a prefix no shell profile names yet is on no PATH at all, so these two
-// pinned false/true is the whole point of the pair.
+// npm's separate answer, asked once PATH has come up empty: an install under a
+// prefix no shell profile names yet is on no PATH at all, so these two pinned
+// false/true is the whole point of the pair.
 let npmHoldsGlobalInstall = false;
 
 vi.mock("../src/utils.js", async (importOriginal) => {
@@ -46,7 +48,9 @@ vi.mock("../src/global-prefix.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/global-prefix.js")>();
   return {
     ...original,
-    globalInstallPresent: vi.fn(() => globallyInstalled || npmHoldsGlobalInstall),
+    npmGlobalPackageRoot: vi.fn(() =>
+      npmHoldsGlobalInstall ? "/npm-global/@swmansion/argent" : null
+    ),
   };
 });
 
@@ -607,6 +611,34 @@ describe("cleanupStaleMcpConfigs", () => {
 
     expect(result.removedCount).toBe(1);
     expect(fs.existsSync(windsurfGlobal)).toBe(false);
+  });
+
+  // One `which`, one npm query, however many entries the sweep walks — both
+  // answers are the same for every entry, and each one costs a process.
+  it("asks PATH and npm once for a sweep spanning several adapters", async () => {
+    globallyInstalled = false;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    const windsurfGlobal = path.join(home, ".codeium", "windsurf", "mcp_config.json");
+    for (const file of [cursorGlobal, windsurfGlobal]) {
+      writeJsonFile(file, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+    }
+
+    // Call records survive the whole file — this run's share is what counts.
+    const pathAsks = vi.mocked(isGloballyInstalled).mock.calls.length;
+    const npmAsks = vi.mocked(npmGlobalPackageRoot).mock.calls.length;
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [],
+      detectedAdapters: [cursor, windsurf],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: async () => true,
+    });
+
+    expect(result.removedCount).toBe(2);
+    expect(vi.mocked(isGloballyInstalled).mock.calls.length - pathAsks).toBe(1);
+    expect(vi.mocked(npmGlobalPackageRoot).mock.calls.length - npmAsks).toBe(1);
   });
 
   it("does not sweep global entries on a global-mode install", async () => {

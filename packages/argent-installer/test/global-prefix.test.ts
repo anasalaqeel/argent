@@ -368,6 +368,20 @@ describe("unwritableGlobalTargetMessage", () => {
     );
   });
 
+  // A home-manager `~/.npm-global/bin` symlinked into the store passes the
+  // under-home check, and the chown Nix undoes at the next rebuild is the one
+  // piece of advice the store rules out.
+  it("never offers ownership of a bin directory inside the store", () => {
+    const storeBin = "/nix/store/abc-nodejs-22.16.0/lib/node_modules/.bin";
+
+    const message = plain(
+      unwritableGlobalTargetMessage(plainTarget, "npm", "install", installed, storeBin)
+    );
+
+    expect(message).toContain(storeBin);
+    expect(message).not.toContain(`chown -R $(whoami) '${storeBin}'`);
+  });
+
   it("offers the writable-prefix fix for npm only", () => {
     expect(plain(unwritableGlobalTargetMessage(nixTarget, "npm", "install", installed))).toContain(
       'npm config set prefix "$HOME/.npm-global"'
@@ -1045,6 +1059,47 @@ describe("blockedGlobalInstallMessage", () => {
       fs.chmodSync(bin, 0o755);
       fs.rmSync(prefix, { recursive: true, force: true });
     }
+  });
+
+  // Both walks climb to the nearest EXISTING directory, so under a prefix whose
+  // `lib/node_modules` and `bin` are yet to be created they land on the prefix
+  // itself — one directory, not two.
+  it("names one directory once when both walks land on it", () => {
+    if (!canTestUnwritable) return;
+    const prefix = path.join(tmpRoot, "fresh-prefix");
+    fs.mkdirSync(prefix, { recursive: true });
+    fs.chmodSync(prefix, 0o555);
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root"
+        ? `${path.join(prefix, "lib", "node_modules")}\n`
+        : `${prefix}\n`) as never);
+
+    const message = plain(blockedGlobalInstallMessage("npm", null, "install", ctx) ?? "");
+
+    expect(message).toContain("global package directory is not writable");
+    expect(message).not.toContain("command into either");
+    fs.chmodSync(prefix, 0o755);
+  });
+
+  // With npm's prefix unanswerable, the installed package's own path is the only
+  // way in: what owns the install is the `node_modules` two segments above it,
+  // and ownership of the package directory itself is no remedy for a rename
+  // that fails a level up.
+  it("takes the ownership remedy from the root above a fallback package path", () => {
+    if (!canTestUnwritable) return;
+    const scope = path.join(tmpRoot, "lib", "node_modules", "@swmansion");
+    fs.mkdirSync(scope, { recursive: true });
+    fs.chmodSync(scope, 0o555);
+    mockExecFileSync.mockImplementation((() => {
+      throw new Error("npm not found");
+    }) as never);
+
+    const message = plain(
+      blockedGlobalInstallMessage("npm", path.join(scope, "argent"), "install", ctx) ?? ""
+    );
+
+    expect(message).toContain(`sudo chown -R $(whoami) '${scope}'`);
+    fs.chmodSync(scope, 0o755);
   });
 
   it("answers null when neither directory is blocked", () => {

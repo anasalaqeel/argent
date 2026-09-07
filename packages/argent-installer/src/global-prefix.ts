@@ -523,18 +523,23 @@ export function unwritableGlobalTargetMessage(
   ctx: RemedyContext,
   alsoBlockedBinDir: string | null = null
 ): string {
+  // Both walks climb to the nearest existing directory, so under a prefix whose
+  // `lib/node_modules` and `bin` are yet to be created they land on the prefix
+  // itself. One directory named twice reads as two permission problems.
+  const alsoBin =
+    alsoBlockedBinDir !== null && path.resolve(alsoBlockedBinDir) === path.resolve(target.dir)
+      ? null
+      : alsoBlockedBinDir;
   const remedies = [
     writablePrefixRemedy(pm, target.dir),
     // Never for a store path: Nix undoes the chown at the next rebuild, which
     // is the whole reason the Nix cause exists.
     target.nixStore ? null : ownershipRemedy(target.dir, target.root),
-    alsoBlockedBinDir === null || isNixStorePath(alsoBlockedBinDir)
-      ? null
-      : ownershipRemedy(alsoBlockedBinDir, alsoBlockedBinDir),
+    alsoBin === null || isNixStorePath(alsoBin) ? null : ownershipRemedy(alsoBin, alsoBin),
     localInstallRemedy(ctx),
   ].filter((remedy): remedy is string => remedy !== null);
 
-  const cause = blockedGlobalTargetCause(target, pm, verb, alsoBlockedBinDir);
+  const cause = blockedGlobalTargetCause(target, pm, verb, alsoBin);
   return withRemedies(cause, remedies);
 }
 

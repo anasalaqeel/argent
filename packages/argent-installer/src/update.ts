@@ -38,6 +38,7 @@ import {
   RULES_DIR,
   AGENTS_DIR,
   type InstallMode,
+  type PackageManager,
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
@@ -87,10 +88,13 @@ function getProjectRootOverride(args: string[]): string | null {
  * Where the global install really sits — npm's own directory ahead of PATH's.
  * PATH names whichever copy comes first, and names none at all when a prefix
  * move installed into a bin directory the user's profile does not export yet;
- * npm's is also the directory `npm install -g` replaces.
+ * npm's is also the directory `npm install -g` replaces. Only where npm is the
+ * manager that will run the install, though: `pnpm add -g` replaces pnpm's
+ * copy, so an npm leftover would answer for an install nobody is touching —
+ * the gate uninstall applies to the same question.
  */
-function globalInstallRoot(): string | null {
-  return npmGlobalPackageRoot() ?? getGloballyInstalledPackageRoot();
+function globalInstallRoot(pm: PackageManager): string | null {
+  return (pm === "npm" ? npmGlobalPackageRoot() : null) ?? getGloballyInstalledPackageRoot();
 }
 
 /** Version in `root`'s manifest; null when there is none to read. */
@@ -245,8 +249,9 @@ export async function update(args: string[]): Promise<void> {
     // cache, always at the latest published version — PACKAGE_ROOT would
     // falsely report "already on the latest". Resolve the *real* install.
     const localProbe = mode === "local" ? probeLocalInstall(projectRoot) : null;
+    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     const argentOnPath = mode === "global" && isGloballyInstalled();
-    const globalRoot = mode === "global" ? globalInstallRoot() : null;
+    const globalRoot = mode === "global" ? globalInstallRoot(pm) : null;
     // A root that will not resolve (Windows .cmd wrapper) is still an install.
     const globallyInstalled = argentOnPath || globalRoot !== null;
     const isInstalledForMode = mode === "local" ? localProbe!.installed : globallyInstalled;
@@ -326,7 +331,6 @@ export async function update(args: string[]): Promise<void> {
     const spinner = p.spinner();
     spinner.start("Checking for updates...");
 
-    const pm = mode === "local" ? detectProjectPackageManager(projectRoot) : detectPackageManager();
     let latest: string | null = null;
     let target: string | null;
     let minReleaseAgeMs = 0;
@@ -513,7 +517,7 @@ export async function update(args: string[]): Promise<void> {
                 (readLocalPackageVersionUncached(projectRoot) ??
                 getLocallyInstalledVersion(projectRoot))
               : // Re-resolved: the install may have just created this copy.
-                readManifestVersion(globalInstallRoot());
+                readManifestVersion(globalInstallRoot(pm));
           // `target` is narrowed non-null by the enclosing if; the closure
           // re-widens it, hence the assertion.
           return landedVersion !== null && !isNewerVersion(target!, landedVersion);
@@ -555,10 +559,40 @@ export async function update(args: string[]): Promise<void> {
         );
         return { failed: UPDATE_PACKAGE_ACTION_FAILED };
       }
+      // The install replaces the manager's own copy; `argent` runs whichever
+      // copy PATH names first. One left in an earlier bin directory — what a
+      // `sudo npm i -g` becomes once the prefix moves — keeps serving the old
+      // build, so the version landed without taking effect.
+      const pathVersion = mode === "global" ? getGloballyInstalledVersion() : null;
+      if (pathVersion !== null && isNewerVersion(target, pathVersion)) {
+        await trackPackageAction(
+          packageAction,
+          packageActionStartedAt,
+          false,
+          UPDATE_PACKAGE_ACTION_FAILED
+        );
+        p.log.error(
+          `${installed ? "Update" : "Install"} landed v${target}, but the \`argent\` on your PATH is ` +
+            `still v${pathVersion}. Check that your package manager's global prefix matches the ` +
+            `\`argent\` on your PATH.`
+        );
+        return { failed: UPDATE_PACKAGE_ACTION_FAILED };
+      }
       await trackPackageAction(packageAction, packageActionStartedAt, true);
       return "updated";
     } else {
       await trackPackageAction("no_update", updateStartTime, true);
+      // `installed` is the copy an install would replace. When PATH names an
+      // older one instead, "already on the latest" is about a build the user
+      // never runs, and no install would ever reach it.
+      const shadowedBy =
+        mode === "global" && installed !== null ? getGloballyInstalledVersion() : null;
+      if (shadowedBy !== null && isNewerVersion(installed!, shadowedBy)) {
+        p.log.warn(
+          `The \`argent\` on your PATH is v${shadowedBy}, behind the v${installed} global install this ` +
+            `checked. Check that your package manager's global prefix matches the \`argent\` on your PATH.`
+        );
+      }
       if (versionUnknown) {
         p.log.warn(
           `Could not determine the installed version (Yarn PnP). ` +

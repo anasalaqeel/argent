@@ -700,3 +700,98 @@ describe("update — a global install PATH cannot see", () => {
     expect(installs.some(([, args]) => !args.includes("-g"))).toBe(true);
   });
 });
+
+// npm's directory is the copy `npm install -g` replaces; `argent` runs whatever
+// PATH names first. When a prefix move leaves an older `sudo npm i -g` in an
+// earlier bin directory, those are two different copies and only one of them
+// gets updated.
+describe("update — a second global copy shadowing the one being updated", () => {
+  let npmRoot: string;
+
+  /** A staged package whose bin `which -a argent` answers with. */
+  const stageOnPath = (root: string, version: string): void => {
+    const packageDir = stageArgentPackage(root, version);
+    fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
+    fs.writeFileSync(path.join(packageDir, "dist", "cli.js"), "");
+    const binDir = path.join(path.dirname(path.dirname(root)), "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const bin = path.join(binDir, "argent");
+    fs.rmSync(bin, { force: true });
+    fs.symlinkSync(path.join(packageDir, "dist", "cli.js"), bin);
+    topologyState.packageRoot = packageDir;
+    childProcessMock.execSync.mockReturnValue(`${bin}\n`);
+  };
+
+  beforeEach(() => {
+    npmRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    // PATH's copy sits under a prefix of its own, left behind by a `sudo npm
+    // i -g` the later `npm config set prefix` moved away from.
+    stageOnPath(path.join(tmpDir, "usr-local", "lib", "node_modules"), "1.0.0");
+  });
+
+  it("fails an update that landed in npm's prefix while PATH still serves the old copy", async () => {
+    stageArgentPackage(npmRoot, "1.0.0");
+    childProcessMock.execFileSync.mockImplementation(((bin: string, args: string[]) => {
+      if (bin !== "npm" || !Array.isArray(args)) return undefined;
+      if (args[0] === "root") return `${npmRoot}\n`;
+      if (args[0] === "install") stageArgentPackage(npmRoot, "99.0.0");
+      return undefined;
+    }) as never);
+
+    await expect(update(["--yes"])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+    expect(
+      errors.some((m) =>
+        m.includes("landed v99.0.0, but the `argent` on your PATH is still v1.0.0")
+      )
+    ).toBe(true);
+    expect(telemetryMock.track).not.toHaveBeenCalledWith(
+      "installation:cli_update_complete",
+      expect.anything()
+    );
+  });
+
+  it("says which copy is stale instead of reporting the shadowed one as up to date", async () => {
+    stageArgentPackage(npmRoot, "99.0.0");
+    childProcessMock.execFileSync.mockImplementation(((bin: string, args: string[]) =>
+      bin === "npm" && Array.isArray(args) && args[0] === "root"
+        ? `${npmRoot}\n`
+        : undefined) as never);
+
+    await update(["--yes"]);
+
+    const warns = promptsMock.log.warn.mock.calls.map(([m]) => plain(m as string));
+    expect(
+      warns.some((m) =>
+        m.includes("The `argent` on your PATH is v1.0.0, behind the v99.0.0 global install")
+      )
+    ).toBe(true);
+    expect(npmInstallCalls()).toHaveLength(0);
+  });
+
+  it("leaves npm's leftover out of an update pnpm will run", async () => {
+    process.env.npm_config_user_agent = "pnpm/9.12.0 npm/? node/v22.0.0 darwin arm64";
+    // npm's directory holds a copy AHEAD of the live one: consulted, it would
+    // report "already on the latest" and never run the pnpm install.
+    stageArgentPackage(npmRoot, "99.0.0");
+    childProcessMock.execFileSync.mockImplementation(((bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (bin === "npm" && args[0] === "root") return `${npmRoot}\n`;
+      if (bin === "pnpm" && args[0] === "add")
+        stageOnPath(path.join(tmpDir, "usr-local", "lib", "node_modules"), "99.0.0");
+      return undefined;
+    }) as never);
+
+    await update(["--yes"]);
+
+    const info = promptsMock.log.info.mock.calls.map(([m]) => plain(m as string));
+    expect(info).toContain("Installed: v1.0.0");
+    const adds = (childProcessMock.execFileSync.mock.calls as Array<[string, string[]]>).filter(
+      ([bin, args]) => bin === "pnpm" && args[0] === "add"
+    );
+    expect(adds).toHaveLength(1);
+    expect(promptsMock.log.error).not.toHaveBeenCalled();
+  });
+});

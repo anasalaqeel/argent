@@ -396,6 +396,10 @@ async function recoverBlockedGlobalInstall(opts: {
       withRemedies(blockedGlobalTargetCause(moved, pm, "install"), [
         ownableRemedy(moved.dir, moved.root),
         localInstallRemedy(remedies),
+        // The prefix write outlives a run that installs nothing, and this is
+        // the only exit that never reaches the disclosure below.
+        `  npm's prefix is recorded in ${configPath} — future global installs land there.\n` +
+          `    Undo with ${pc.cyan("npm config delete prefix")}.`,
       ])
     );
   }
@@ -418,7 +422,8 @@ async function recoverBlockedGlobalInstall(opts: {
 /**
  * The cause, then whichever remedies still apply. The recovery's own failures
  * leave out the remedy that prescribes moving the prefix: it is the step that
- * just ran.
+ * just ran, so an empty list is left empty rather than falling back to it the
+ * way the exported {@link import("./global-prefix.js")} twin does.
  */
 function withRemedies(cause: string, remedies: (string | null)[]): string {
   const usable = remedies.filter((remedy): remedy is string => remedy !== null);

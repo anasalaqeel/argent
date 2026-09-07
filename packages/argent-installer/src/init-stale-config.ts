@@ -1,7 +1,7 @@
 import pc from "picocolors";
 import { MCP_BINARY_NAME } from "./constants.js";
 import { isGloballyInstalled } from "./utils.js";
-import { globalInstallPresent } from "./global-prefix.js";
+import { npmGlobalPackageRoot } from "./global-prefix.js";
 import { hasCustomizingEnv, type McpConfigAdapter, type McpServerEntry } from "./mcp-configs.js";
 
 interface StaleConfigCleanupResult {
@@ -62,7 +62,7 @@ export async function cleanupStaleMcpConfigs(args: {
   // An install this shell's PATH cannot reach is still an install: a prefix
   // move lands one in a bin directory no shell profile names yet. Asked only
   // once PATH has come up empty.
-  const globalArgentInstalled = globalArgentOnPath || globalInstallPresent();
+  const globalArgentInstalled = globalArgentOnPath || npmGlobalPackageRoot() !== null;
 
   // Nothing on PATH, nothing in npm's global directory, and no env that could
   // make it resolvable inside the client (a custom PATH is exactly what an nvm

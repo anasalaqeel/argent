@@ -1588,3 +1588,65 @@ describe("uninstall — a global install the shells cannot see yet", () => {
     expect(toolsClientMock.killToolServerForInstallDir).toHaveBeenCalledWith(realPackageDir);
   });
 });
+
+describe("uninstall — a project shim ahead of a global install another manager owns", () => {
+  // Same shim `npm run`/`pnpm exec`/direnv puts first on PATH, but the manager
+  // is pnpm: its global layout has no name argent can check, so PATH is the only
+  // witness left — and the copy PATH names here is one no global removal touches.
+  let savedHome: string | undefined;
+  let savedAgentHere: string | undefined;
+  let pnpmPkg: string;
+  let projDirHere: string;
+
+  beforeEach(() => {
+    savedHome = process.env.HOME;
+    savedAgentHere = process.env.npm_config_user_agent;
+    process.env.HOME = tmpDir;
+    process.env.npm_config_user_agent = "pnpm/10.0.0 npm/? node/v24.0.0 darwin arm64";
+    pnpmPkg = path.join(tmpDir, "pnpm-global", "5", "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(pnpmPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+
+    projDirHere = path.join(tmpDir, "proj");
+    const localPkg = path.join(projDirHere, "node_modules", "@swmansion", "argent");
+    writeFile(
+      path.join(localPkg, "package.json"),
+      JSON.stringify({ name: "@swmansion/argent", version: "9.9.9" })
+    );
+    writeFile(path.join(localPkg, "dist", "cli.js"), "#!/usr/bin/env node\n");
+    const localBin = path.join(projDirHere, "node_modules", ".bin", "argent");
+    fs.mkdirSync(path.dirname(localBin), { recursive: true });
+    fs.symlinkSync(path.join(localPkg, "dist", "cli.js"), localBin);
+
+    childProcessMock.execSync.mockImplementation(() => `${localBin}\n`);
+    childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
+      if (!Array.isArray(args)) return undefined;
+      if (args.includes("root") && args.includes("-g"))
+        return `${path.join(tmpDir, "npm-global", "lib", "node_modules")}\n`;
+      if (args.includes("remove") && args.includes("-g"))
+        fs.rmSync(pnpmPkg, { recursive: true, force: true });
+      return undefined;
+    }) as never);
+    process.chdir(projDirHere);
+  });
+
+  afterEach(() => {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+    if (savedAgentHere === undefined) delete process.env.npm_config_user_agent;
+    else process.env.npm_config_user_agent = savedAgentHere;
+  });
+
+  it("does not read the surviving project copy as the global removal failing", async () => {
+    await uninstall(["--yes", "--global"]);
+
+    expect(fs.existsSync(pnpmPkg)).toBe(false);
+    expect(vi.mocked(log.success).mock.calls.map(([m]) => m as string)).toContain(
+      "Removed global package."
+    );
+    const errors = vi.mocked(log.error).mock.calls.map(([m]) => m as string);
+    expect(errors.some((m) => m.includes("The global package was not removed"))).toBe(false);
+  });
+});
