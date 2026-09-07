@@ -1286,7 +1286,7 @@ baseline (a missing baseline fails the step — set updateBaselines to adopt the
 cropped element whose size drifted fails on dimensions); \`echo\` annotates; \`run\` executes another flow
 inline — a YAML path resolved against the directory of the flow file that references it (co-located
 runs only); \`script\` runs a local script file for setup, cleanup, or any work a device step cannot do — a \`.mjs\` in a fresh Node process, a \`.sh\` under bash
-(\`script: { path: ../../scripts/seed.mjs, timeout?: <ms> }\` — always a map, never a bare path; the path
+(\`script: { path: ../../scripts/seed.mjs, timeout?: <ms>, env?: { NAME: value } }\` — always a map, never a bare path; the path
 is resolved against the flow file that names the step, exactly as a \`run\` target is, so a saved flow
 climbs out of .argent/flows/ to reach the project's own scripts/ directory. The step needs no device, so
 a script-only flow runs with nothing booted — but a \`run\` or a \`when\` step beside it still resolves
