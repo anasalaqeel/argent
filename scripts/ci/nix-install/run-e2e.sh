@@ -73,7 +73,14 @@ begin() { printf '\n=== %s ===\n' "$1"; }
 # A log that cannot be read answers 2, not "no match": the command substitution
 # throws sed's status away, so a scenario whose output never landed would
 # otherwise pass every `absent` in it.
-plain() { LC_ALL=C sed $'s/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1"; }
+# Escape sequences out, and with them util-linux `script`'s own header, which
+# quotes the whole command into the first line of the transcript — every marker
+# an assertion looks for is in that command, and would match before the command
+# has run. --quiet does not suppress it.
+plain() {
+  LC_ALL=C sed -e '/^Script started on .*\[COMMAND=/d' -e '/^Script done on /d' \
+    -e $'s/\x1b\[[0-9;?]*[a-zA-Z]//g' "$1"
+}
 found() {
   local text
   text="$(plain "$1")" || return 2
@@ -225,7 +232,7 @@ pty_run() {
   kill -9 "$runner" 2>/dev/null
   wait "$runner" 2>/dev/null
   local rc
-  rc="$(plain "$out" | sed -n "s/.*$PTY_DONE\\([0-9][0-9]*\\).*/\\1/p" | tail -1)"
+  rc="$(plain "$out" | sed -n "s/^$PTY_DONE\\([0-9][0-9]*\\).*/\\1/p" | tail -1)"
   return "${rc:-1}"
 }
 
