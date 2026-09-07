@@ -1351,7 +1351,7 @@ Pass exactly one flow source: name for a saved flow under project_root, or flow_
       // the shared refusal is worded for a flow FILE and classified as one, and
       // this is the same parameter.
       try {
-        assertNoEnvOutputReferences(params.env, "This run's", "flow_run_env");
+        assertNoEnvOutputReferences(params.env, "This run's");
       } catch (err) {
         throw new InvalidToolInputError(err instanceof Error ? err.message : String(err), {
           failure_stage: "flow_run_env",
