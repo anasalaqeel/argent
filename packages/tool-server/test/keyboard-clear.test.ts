@@ -589,6 +589,15 @@ describe("keyboard clear — Android (adb input)", () => {
     `<node index="0" text="${text}" resource-id="email" class="android.widget.EditText" ` +
     `password="${password}" focused="true" bounds="[0,0][100,50]" />` +
     `</hierarchy>`;
+  // The shape a level that HAS `keycombination` gives a field with a
+  // placeholder: API 36 dumps a focused EMPTY Settings search box as
+  // `text="Search settings" … hint="Search settings"`, putting the placeholder
+  // in the same attribute as a value.
+  const dumpHinted = (text: string, hint: string) =>
+    `<?xml version='1.0' encoding='UTF-8'?><hierarchy rotation="0">` +
+    `<node index="0" text="${text}" hint="${hint}" resource-id="search" ` +
+    `class="android.widget.EditText" password="false" focused="true" bounds="[0,0][100,50]" />` +
+    `</hierarchy>`;
 
   it("falls back to a measured delete run when `keycombination` is unavailable", async () => {
     // An older level has no `keycombination` subcommand — and still EXITS 0,
@@ -681,6 +690,62 @@ describe("keyboard clear — Android (adb input)", () => {
     expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
   });
 
+  it("reads a field holding exactly its own placeholder as empty, not as residue", async () => {
+    // uiautomator renders an empty field's hint into `text`, so a clear that
+    // WORKED reads its own placeholder back. Measured as residue that fires the
+    // delete run into the field just emptied — 24 key events against an empty
+    // Settings search box. `hint` is the discriminator, and it exists on exactly
+    // the levels this path serves.
+    seedDump(dumpHinted("Search settings", "Search settings"));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+  });
+
+  it("does not refuse a clear that worked because its placeholder is long", async () => {
+    // The same misreading past MAX_DELETE_COUNT is not a wasted run but a 400:
+    // the length refusal fires over an emptied field, and the `text` that was to
+    // replace it never goes out. A placeholder is prose, so it reaches that
+    // length long before a login or search value does.
+    const placeholder = "Search your settings and everything else on this device, ".repeat(3);
+    expect(placeholder.length).toBeGreaterThan(MAX_DELETE_COUNT);
+    seedDump(dumpHinted(placeholder, placeholder));
+
+    await makeAndroidImpl(registryWith({})).handler(
+      {},
+      { udid: ANDROID.id, clear: true, text: "wifi" },
+      ANDROID
+    );
+
+    expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD, "input text 'wifi'"]);
+  });
+
+  it("keeps the placeholder rule off the sizing read, which cannot afford it", async () => {
+    // The two readings want opposite errors. For the read-back an over-measure
+    // deletes a field that was already empty, so discarding a `text` that equals
+    // its `hint` is the safe way to be wrong. For the sizing read there is no
+    // rescue behind it: under-measuring by the field's whole length sends eight
+    // backspaces at a ten-character value and appends the new text to what is
+    // left — the truncation the measurement exists to prevent.
+    seedLegacyLevel();
+    seedDump(dumpHinted("abcdefghij", "abcdefghij"));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(deleteRun(inputCmds()[1]!)).toHaveLength(10 + 8);
+  });
+
+  it("still repairs a value that merely SITS in a hinted field", async () => {
+    // The placeholder rule must not cost the repair the branch exists for: a
+    // residue is only discarded when it IS the hint, not whenever one is present.
+    seedDump(dumpHinted("Monda", "Search settings"));
+
+    await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
+
+    expect(deleteRun(inputCmds()[2]!)).toHaveLength(5 + 8);
+  });
+
   it("does not retry the read-back dump the way the sizing read does", async () => {
     // The sizing read retries past DUMP_RETRY_BACKOFF_MS because losing the
     // UiAutomation race there means the blind count and a truncated field. The
@@ -696,8 +761,8 @@ describe("keyboard clear — Android (adb input)", () => {
   });
 
   it("measures the residue once, instead of dumping again inside the delete run", async () => {
-    // The rescue hands its measurement down. Re-measuring would cost a second
-    // dump — and read a field the first `MOVE_END` may already have moved on.
+    // The rescue hands its measurement down; re-measuring would cost a second
+    // dump for an answer the caller already has.
     seedDump(dumpWith("Monda"));
 
     await makeAndroidImpl(registryWith({})).handler({}, { udid: ANDROID.id, clear: true }, ANDROID);
@@ -725,7 +790,6 @@ describe("keyboard clear — Android (adb input)", () => {
 
     expect(err).toBeInstanceOf(InvalidToolInputError);
     expect((err as Error).message).toContain("The field MAY have been modified");
-    expect((err as Error).message).toContain("removes one");
     expect((err as Error).message).not.toContain("Nothing was modified");
     expect((err as Error).message).not.toContain("HAS been modified");
     expect((err as Error).message).not.toContain("newer API level");
@@ -734,6 +798,9 @@ describe("keyboard clear — Android (adb input)", () => {
     // chord failed either — only that something read back too long.
     expect((err as Error).message).toContain("read back non-empty after the select-all");
     expect((err as Error).message).not.toContain("select-all did not take");
+    // Nor which of the two the DEL took: a chord that DID take makes it remove
+    // the whole selection, leaving the field empty rather than one short.
+    expect((err as Error).message).toContain("either a live selection or one character");
     // Refused rather than half-deleted: no run was started.
     expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
   });
