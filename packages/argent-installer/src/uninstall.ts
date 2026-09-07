@@ -32,6 +32,7 @@ import {
 } from "./utils.js";
 import { execShellCommandSync } from "./shell.js";
 import { npmGlobalPackagePath } from "./global-prefix.js";
+import { removeCliRecordFor } from "./cli-record.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { killToolServerForInstallDir } from "@argent/tools-client";
@@ -791,6 +792,15 @@ export async function uninstall(args: string[]): Promise<void> {
         // mode:"local" record keeps `update`/`uninstall` targeting a gone devDependency.
         if (removable.kind === "local" && removeInstallRecord(projectRoot)) {
           p.log.info(pc.dim("Removed .argent/install.json (local mode marker)."));
+        }
+
+        /**
+         * Only when the record points inside the install just removed. The
+         * two modes coexist and orphaning a record that names a surviving
+         * install would break provider CLI discovery for no reason.
+         */
+        if (removeCliRecordFor(removable.installDir)) {
+          p.log.info(pc.dim("Removed ~/.argent/cli.json (provider CLI discovery record)."));
         }
       } catch (err) {
         p.log.error(`${removable.kind} uninstall failed: ${err}`);
