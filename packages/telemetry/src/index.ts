@@ -30,6 +30,7 @@ export type {
   EventName,
   EventPropertyMap,
   Platform,
+  TelemetryDeviceKind,
 } from "./events.js";
 export {
   DEBUGGER_NOT_CONNECTED_REASONS,
