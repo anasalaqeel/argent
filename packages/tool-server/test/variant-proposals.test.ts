@@ -60,6 +60,39 @@ describe("VariantProposalStore — proposing (non-blocking)", () => {
     expect(bar!.match).toEqual({ by: "identifier", value: "bar-id" });
   });
 
+  it("keys a card the same way the element is resolved on screen: case-insensitively", () => {
+    // `proposalKey` must not be stricter than `normLabel`/`vpNormLabel`, which
+    // lowercase and strip hyphens for identifier/label/role alike. A stricter key
+    // would split one on-screen element across two cards, both bubbles anchored
+    // to the same node and the variants no longer comparable side by side.
+    const s = new VariantProposalStore();
+    s.proposeVariant({
+      element: "Save",
+      match: { by: "identifier", value: "saveButton" },
+      variant: variant("A"),
+    });
+    s.proposeVariant({
+      element: "Save",
+      match: { by: "identifier", value: "SaveButton" },
+      variant: variant("B"),
+    });
+    s.proposeVariant({
+      element: "Save",
+      match: { by: "label", value: "SAVE NOW" },
+      variant: variant("C"),
+    });
+    s.proposeVariant({
+      element: "Save",
+      match: { by: "label", value: "save now" },
+      variant: variant("D"),
+    });
+
+    const cards = s.snapshot().proposals;
+    expect(cards).toHaveLength(2);
+    expect(cards[0]!.variants.map((v) => v.name)).toEqual(["A", "B"]);
+    expect(cards[1]!.variants.map((v) => v.name)).toEqual(["C", "D"]);
+  });
+
   it("returns no_proposals when awaiting before any proposal", async () => {
     const s = new VariantProposalStore();
     const out = await s.awaitSelection({ timeoutMs: 1000 });
