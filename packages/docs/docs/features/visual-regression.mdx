@@ -58,6 +58,6 @@ Thus you can keep visual checks in the repository and run them in CI.
 - When only the resolution differs, Argent scales the larger screenshot down to the size of the smaller one. Argent then reports a clean result as `resized_no_change` and not as `unchanged`.
 - The scaling can add a small difference. The scaling can also remove one, for example a hairline or a change in the subpixel text. A clean `resized_no_change` is thus weaker evidence than a clean `unchanged`.
 - The agent does not use the comparison to find the position of an element for a tap. The agent uses the screen description for that.
-- The comparison works on an iOS simulator or device, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps.
+- The comparison works on an iOS simulator, or an Android emulator or device. It does not work on Chromium, Apple TV or Vega apps. On a [physical iPhone](/docs/features/physical-ios-devices), the agent captures full-resolution screenshots and compares them on the host instead.
 
 Argent does this with the `screenshot` and `screenshot-diff` tools. The [tools reference](/docs/reference/tools) contains all tools.

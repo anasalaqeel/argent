@@ -1,6 +1,27 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ArtifactStore } from "@argent/registry";
-import { createScreenshotTool } from "../src/tools/screenshot";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import { ArtifactStore, type Registry } from "@argent/registry";
+
+// The physical-iOS route shells out (`sips` for the downscale) via
+// promisify(execFile), so mock child_process the way screenshot-tv-scale.test.ts
+// does. promisify appends a node-style callback as the last argument.
+const execFileMock = vi.fn();
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  return { ...actual, execFile: (...args: unknown[]) => execFileMock(...args) };
+});
+
+// The rotation-less android-shaped captures here run the real adb rotation
+// probe against the host's adb server; a wedged one stalls the tests for its
+// full timeout. Rotation is orthogonal to what these tests pin.
+vi.mock("../src/utils/device-orientation", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/utils/device-orientation")>()),
+  readAndroidSurfaceRotation: vi.fn(async () => null),
+}));
+
+import { createScreenshotTool, downscalePngInPlace } from "../src/tools/screenshot";
+import { IOS_DEVICE_RUNNER_NAMESPACE } from "../src/blueprints/ios-device-runner";
+import { RUNNER_COMMAND_TIMEOUT_MS } from "../src/utils/ios-device/runner-client";
 import {
   createMoqTransport,
   getScreenshotScale,
@@ -10,13 +31,45 @@ import {
 const ONE_PIXEL_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
-// The rotation-less android-shaped captures here run the real adb rotation
-// probe against the host's adb server; a wedged one stalls the tests for its
-// full timeout. Rotation is orthogonal to what these tests pin.
-vi.mock("../src/utils/device-orientation", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/utils/device-orientation")>()),
-  readAndroidSurfaceRotation: vi.fn(async () => null),
-}));
+type ExecFileCallback = (e: Error | null, r?: { stdout: string; stderr: string }) => void;
+
+function callbackOf(args: unknown[]): ExecFileCallback | undefined {
+  return args.find((a) => typeof a === "function") as ExecFileCallback | undefined;
+}
+
+function failAllSpawns(message = "unexpected execFile call"): void {
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    callbackOf(args)?.(new Error(message));
+  });
+}
+
+function mockSips(dims: { width: number; height: number }): { zTargets: () => string[] } {
+  const zCalls: string[] = [];
+  execFileMock.mockImplementation((...args: unknown[]) => {
+    const file = args[0] as string;
+    const argv = (args[1] as string[]) ?? [];
+    const cb = callbackOf(args);
+    if (file === "sips" && argv[0] === "-g") {
+      cb?.(null, {
+        stdout: `pixelWidth: ${dims.width}\npixelHeight: ${dims.height}\n`,
+        stderr: "",
+      });
+      return;
+    }
+    if (file === "sips" && argv[0] === "-Z") {
+      zCalls.push(argv[1]);
+      cb?.(null, { stdout: "", stderr: "" });
+      return;
+    }
+    cb?.(new Error(`unexpected execFile ${file} ${argv.join(" ")}`));
+  });
+  return { zTargets: () => zCalls };
+}
+
+beforeEach(() => {
+  execFileMock.mockReset();
+  failAllSpawns();
+});
 
 describe("screenshot tool", () => {
   afterEach(() => {
@@ -151,14 +204,13 @@ describe("screenshot tool", () => {
 
     // Both halves verbatim, not the two ends of the sentence: matching only
     // those leaves the middle free, and the middle is where a platform gets
-    // sorted into the wrong list. A tethered iPhone belongs in neither — its
-    // UDID does not match the iOS-simulator shape `classifyDevice` tests, so
-    // nothing routes it through a rotation-capable path.
+    // sorted into the wrong list. A tethered iPhone captures through the
+    // XCUITest runner, which never sees `rotation`, so it belongs in the
+    // unrotated half.
     const description = createScreenshotTool(registry).zodSchema!.shape.rotation.description!;
     expect(description).toContain("Applied on Android and on local iOS simulators");
-    expect(description).not.toContain("tethered");
     expect(description).toContain(
-      "Apple TV, Vega and remote iOS simulators accept it and capture unrotated"
+      "Apple TV, Vega, physical iPhones and remote iOS simulators accept it and capture unrotated"
     );
   });
 
@@ -193,5 +245,73 @@ describe("screenshot tool", () => {
     for (const field of ["rotation", "scale", "downscaler"] as const) {
       expect(shape[field].description, field).toContain("`sharp`");
     }
+  });
+});
+
+describe("physical-iOS route: the runner is the only capture path", () => {
+  const UDID = "00008110-000978540290401E";
+  const DEVICE = { id: UDID, platform: "ios", kind: "device" };
+
+  function runnerStub(imageBase64: string | undefined) {
+    const run = vi.fn(async () => ({ imageBase64 }));
+    const resolveService = vi.fn(async () => ({ run, udid: UDID }));
+    return { run, resolveService };
+  }
+
+  function screenshotDevice(resolveService: unknown, scale = 1.0) {
+    const tool = createScreenshotTool({ resolveService } as unknown as Registry);
+    return tool.execute(
+      {},
+      { udid: UDID, scale, includeImageInContext: true },
+      { artifacts: new ArtifactStore() }
+    );
+  }
+
+  it("captures through the runner, on a client window that outlasts the runner's own budget", async () => {
+    const { run, resolveService } = runnerStub(Buffer.from("png-bytes").toString("base64"));
+
+    const result = await screenshotDevice(resolveService);
+
+    expect(resolveService).toHaveBeenCalledWith(`${IOS_DEVICE_RUNNER_NAMESPACE}:${UDID}`, {
+      device: DEVICE,
+    });
+    // PROTOCOL.md's invariant: a client window at or below the runner's own 30s
+    // screenshot budget swallows its COMMAND_TIMED_OUT verdict as a raw
+    // transport timeout and forces journal recovery for an answer already on
+    // the way, so the documented 45s client default is the only right value.
+    expect(RUNNER_COMMAND_TIMEOUT_MS).toBeGreaterThan(30_000);
+    expect(run).toHaveBeenCalledWith(
+      { command: "screenshot" },
+      { readOnly: true, timeoutMs: RUNNER_COMMAND_TIMEOUT_MS }
+    );
+    expect(result.image.hostPath).toContain("argent-ios-device-screenshot-");
+    await expect(fs.readFile(result.image.hostPath, "utf8")).resolves.toBe("png-bytes");
+    await fs.rm(result.image.hostPath, { force: true });
+  });
+
+  it("throws when the runner answers without inline image data", async () => {
+    const { resolveService } = runnerStub(undefined);
+
+    await expect(screenshotDevice(resolveService)).rejects.toThrow(
+      "Runner screenshot returned no inline image data."
+    );
+  });
+});
+
+describe("downscalePngInPlace: shared device-route downscale", () => {
+  it("caps the longest actual side at the requested scale", async () => {
+    const sips = mockSips({ width: 1920, height: 1080 });
+    await downscalePngInPlace("/tmp/cap.png", 0.5);
+    expect(sips.zTargets()).toEqual(["960"]);
+  });
+
+  it("spawns nothing at scale 1", async () => {
+    await downscalePngInPlace("/tmp/cap.png", 1.0);
+    expect(execFileMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the full-resolution file when sips fails (best-effort)", async () => {
+    failAllSpawns("sips: command not found");
+    await expect(downscalePngInPlace("/tmp/cap.png", 0.5)).resolves.toBeUndefined();
   });
 });
