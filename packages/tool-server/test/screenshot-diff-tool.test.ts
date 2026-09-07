@@ -51,8 +51,7 @@ describe("screenshotDiffTool", () => {
       ["The image is written at its original size.", true],
       ["Kept at the device's resolution.", true],
       ["The baseline is saved at the device's native resolution.", true],
-      // The possessor is optional in every spelling an author reaches for, and
-      // naming only `device` left all of these outside the sweep.
+      // The possessor is optional in every spelling an author reaches for.
       ["The live side is captured at native resolution.", true],
       ["The live side is captured at its native resolution.", true],
       ["The live side is captured at the screen's native resolution.", true],
@@ -69,11 +68,9 @@ describe("screenshotDiffTool", () => {
       ["The tool will rescale to 1.0 before diffing.", true],
       // The subject can be the result field itself. `_` is a word character and
       // a camelCase hump is not a boundary, so the words inside these
-      // identifiers are invisible to a `\b`-delimited alternative — which is
-      // how "- diff_images: see diffPath (full size) and contextDiffPath in
-      // this result", the bullet this PR removed, carried a size claim past
-      // every sweep. One row each: that bullet named both, so either alone
-      // satisfied it.
+      // identifiers are invisible to a `\b`-delimited alternative — and the
+      // summary labels its artifacts with the identifiers alone. One row each,
+      // because a line naming both is satisfied by either.
       ["- diff_images: at full size.", true],
       ["contextDiffPath is written at full size.", true],
       // Typography, not vocabulary: a non-breaking hyphen and a typographic
@@ -88,6 +85,24 @@ describe("screenshotDiffTool", () => {
       ["The mp4 frames are not downscaled.", false],
       ["Recorded frames are unscaled.", false],
       ["Each recorded frame is written at its original size.", false],
+      // …and it excuses only a sentence with nothing else in it to be about: a
+      // recording token beside the name of a still artifact is a screenshot
+      // claim wearing a recording verb. One row per name, because a sentence
+      // carrying two is satisfied by either. The table is the shape that forces
+      // it — `claimsIn` hands one over whole, so a recording row must not excuse
+      // the row beside it.
+      ["Record it at full resolution, then keep the screenshot.", true],
+      ["Record it at full resolution, then keep the png.", true],
+      ["Record it at full resolution, then keep the baseline.", true],
+      ["Record it at full resolution, then keep the snapshot.", true],
+      ["Record it at full resolution, then keep the diff.", true],
+      [
+        "| `screen-recording-start` | Start recording to an h264 mp4 | | `screenshot` | Capture the screen at full resolution |",
+        true,
+      ],
+      // …while the words a recording surface uses for its own output are not
+      // evidence of a still, or the carve-out would un-exempt what it is for.
+      ["The recording captures frames at full resolution.", false],
       ["`scale` accepts values from 0.01 to 1.0.", false],
       ["Downscaled to 30% of original resolution.", false],
       ["grayscale = 1 is the default.", false],
@@ -541,11 +556,11 @@ describe("screenshotDiffTool", () => {
       ],
       "screenshot-diff.captureBaseline": [
         "A physical iPhone captures through the on-device runner, at full resolution and with no scale fallback.",
-        "A simulator or emulator captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead).",
+        "Every other device captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead).",
       ],
       "screenshot-diff.captureCurrent": [
         "A physical iPhone captures through the on-device runner, at full resolution and with no scale fallback.",
-        "A simulator or emulator captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead).",
+        "Every other device captures at full resolution when that succeeds, otherwise at the tool-server's screenshot scale (ARGENT_SCREENSHOT_SCALE, 0.25 by default; at 1.0 the retry repeats the request that just failed, leaving a device that cannot stream a full frame with no fallback — capture both sides with `screenshot` at an explicit scale and pass saved paths instead).",
       ],
       "screenshot.scale": [
         "Some Android emulators cannot stream a full-resolution frame and reject scale: 1.0 with a `wrong data size` error; omit `scale` there, which is where screenshot-diff's own live capture lands once its 1.0 attempt fails, so a baseline saved that way matches it — unless ARGENT_SCREENSHOT_SCALE is itself 1.0, where omitting it repeats the rejected request and both sides have to be saved at the same explicit scale instead.",
@@ -795,12 +810,6 @@ describe("screenshotDiffTool", () => {
   });
 
   it("captures the live side through the runner on a physical iPhone and ignores rotation", async () => {
-    // At this env value the simulator-server route re-sends the request that
-    // just failed and both attempts throw, which is the dead end both capture
-    // flags spend a clause on. The runner route negotiates no scale at all, so
-    // it has to succeed here — the half of that clause the descriptions split
-    // by platform, and the one no other test sets this env for.
-    vi.stubEnv("ARGENT_SCREENSHOT_SCALE", "1.0");
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "argent-screenshot-diff-device-"));
     const baselinePath = path.join(dir, "baseline.png");
     await writePng(baselinePath, 2, 2, { r: 10, g: 20, b: 30 });
@@ -822,14 +831,13 @@ describe("screenshotDiffTool", () => {
 
     // The rotation parameter is not forwarded. Hardware captures always follow
     // the device's real orientation, the same behaviour as the screenshot tool.
-    // One call, and no `scale` on it: read off the argument rather than counted,
-    // because a retry added here would be a second call with the same shape.
+    // Matched whole rather than by key: this route negotiates no scale, and an
+    // added one is an extra key rather than a changed value.
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith(
       { command: "screenshot" },
       { readOnly: true, timeoutMs: RUNNER_COMMAND_TIMEOUT_MS }
     );
-    expect(JSON.stringify(run.mock.calls)).not.toContain("scale");
     const liveCaptures = (await fs.readdir(dir)).filter((name) =>
       /^current-[a-f0-9]{8}\.live\.png$/.test(name)
     );

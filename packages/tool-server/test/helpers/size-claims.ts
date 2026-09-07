@@ -52,8 +52,7 @@ const IMAGE_SUBJECT =
 /**
  * `native resolution` says the same thing as the rest of the vocabulary. The
  * possessor is optional because the natural spellings drop it — `at native
- * resolution`, `at its native resolution` — and naming only `device` left every
- * one of those outside the sweep.
+ * resolution`, `at its native resolution`.
  */
 const CLAIMS_NATIVE =
   /\bat\s+(?:the\s+|its\s+)?(?:device(?:'s)?\s+|screen(?:'s)?\s+)?native\s+(?:resolution|size)\b/i;
@@ -63,13 +62,25 @@ const CLAIMS_NATIVE =
  * surface, and the true thing to say on a recording one: argent-screen-recording's
  * h264 frames really are taken at the device's own resolution, and no
  * `wrong data size` rejection is in reach of a recording. So the exemption
- * covers every arm — sentence by sentence, so it excuses only a sentence that
- * is itself about a recording.
+ * covers every arm rather than only `native` — the claim is as true written
+ * "the mp4 frames are not downscaled" as written "at native resolution".
+ *
+ * It excuses only a sentence with nothing else in it to be about. A recording
+ * token is not enough on its own: "record the baseline with `screenshot` at
+ * full resolution" is a screenshot claim wearing a recording verb, and
+ * `claimsIn` hands a whole markdown table over as one sentence, so one
+ * recording row would otherwise excuse every row beside it.
+ *
+ * The names of still artifacts only. `capture`, `frame`, `image`, `pixels` and
+ * `resolution` are what a recording surface calls its own output, so a sweep
+ * that read them as evidence of a still would un-exempt the very sentences the
+ * carve-out exists for.
  */
 const ABOUT_A_RECORDING = /\brecord(?:s|ed|ing|ings)?\b|\bvideos?\b|\bh264\b|\bmp4\b|\bfps\b/i;
+const A_STILL_CAPTURE = /\b(?:screenshots?|pngs?|diffs?|baselines?|snapshots?)\b/i;
 
 const claimsSize = (sentence: string): boolean => {
-  if (ABOUT_A_RECORDING.test(sentence)) return false;
+  if (ABOUT_A_RECORDING.test(sentence) && !A_STILL_CAPTURE.test(sentence)) return false;
   if (CLAIMS_SIZE_PLAIN.test(sentence)) return true;
   if (CLAIMS_SIZE_IN_CONTEXT.test(sentence) && IMAGE_SUBJECT.test(sentence)) return true;
   return CLAIMS_NATIVE.test(sentence);
