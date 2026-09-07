@@ -21,10 +21,12 @@ import { advertisedSchema } from "./catalog";
  *
  * `scale` written with a `:` or `=` is the parameter wherever it appears, so it
  * is read as a claim on its own — a description writing `scale = 1` is writing
- * about this parameter and nothing else.
+ * about this parameter and nothing else. Its value is matched to the end of the
+ * number rather than to a `\b`, which falls between the `1` and the `.` of
+ * `scale: 1.5`; the lookahead still allows the `.` that ends a sentence.
  */
 const CLAIMS_SIZE_PLAIN =
-  /full[- ](?:device\s+)?(?:resolution|res\b)|\bunscaled\b|\bpixel[- ]for[- ]pixel\b|\b(?:never|not|no)\s+(?:down)?(?:scaled|scaling|resampled|resampling|resized|resizing)\b|\boriginal\s+dimensions\b|100%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|device\s+|native\s+)?(?:scale|resolution)|\bat\s+(?:the\s+|its\s+)?(?:original|device(?:'s)?)\s+(?:resolution|size|dimensions|scale)\b|["'`]?\bscale["'`]?\s*[:=]\s*1(?:\.0+)?\b/i;
+  /full[- ](?:device\s+)?(?:resolution|res\b)|\bunscaled\b|\bpixel[- ]for[- ]pixel\b|\b(?:never|not|no)\s+(?:down)?(?:scaled|scaling|resampled|resampling|resized|resizing)\b|\boriginal\s+dimensions\b|100%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|device\s+|native\s+)?(?:scale|resolution)|\bat\s+(?:the\s+|its\s+)?(?:original|device(?:'s)?)\s+(?:resolution|size|dimensions|scale)\b|["'`]?\bscale["'`]?\s*[:=]\s*1(?:\.0+)?(?!\d|\.\d)/i;
 
 /**
  * The same vocabulary in spellings that carry no subject of their own. `1:1`,

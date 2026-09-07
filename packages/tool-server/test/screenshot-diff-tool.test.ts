@@ -104,6 +104,12 @@ describe("screenshotDiffTool", () => {
       // evidence of a still, or the carve-out would un-exempt what it is for.
       ["The recording captures frames at full resolution.", false],
       ["`scale` accepts values from 0.01 to 1.0.", false],
+      // The value is matched to the end of the number: `\b` falls between the
+      // `1` and the `.`, so these read as `scale: 1`. A `.` that ends a sentence
+      // is not a digit and still matches.
+      ["Emulators reject scale: 1.5 outright.", false],
+      ["Emulators reject scale: 1.05 outright.", false],
+      ["The live attempt uses scale: 1.", true],
       ["Downscaled to 30% of original resolution.", false],
       ["grayscale = 1 is the default.", false],
       ["upscale: 1 leaves it alone.", false],
