@@ -13,6 +13,15 @@ let docs: Array<{ name: string; text: string }> = [];
 const claimsIn = (text: string): string[] =>
   text.split(/\n\s*\n/).flatMap((block) => sentencesClaimingSize(block));
 
+/**
+ * A physical iPhone captures through the on-device XCUITest runner, which takes
+ * the frame whole and negotiates no scale at all, so the simulator-server's
+ * `wrong data size` rejection cannot reach it and naming it there would itself
+ * be false. Keyed on the runner rather than on "hardware", because an Android
+ * phone captures through the simulator-server exactly as an emulator does.
+ */
+const CAPTURED_BY_THE_IOS_RUNNER = /\bon-device runner\b/i;
+
 /** Split at markdown headings, so an escort three sections away cannot cover a claim. */
 const sections = (text: string): string[] => {
   const out: string[] = [];
@@ -22,6 +31,16 @@ const sections = (text: string): string[] => {
   }
   return out;
 };
+
+/** The claims a set of docs leaves without an escort, as the check below reads them. */
+const unescortedIn = (pages: Array<{ name: string; text: string }>): string[] =>
+  pages.flatMap(({ name, text }) =>
+    sections(text)
+      .filter((section) => !section.includes("wrong data size"))
+      .flatMap((section) => claimsIn(section))
+      .filter((claim) => !CAPTURED_BY_THE_IOS_RUNNER.test(claim))
+      .map((claim) => `${name}: ${claim}`)
+  );
 
 beforeAll(async () => {
   docs = await readAgentDocs();
@@ -90,13 +109,20 @@ describe("agent docs reaching for a full-resolution screenshot", () => {
   });
 
   it("every one of them names the emulators that reject it", () => {
-    const unescorted = docs.flatMap(({ name, text }) =>
-      sections(text)
-        .filter((section) => !section.includes("wrong data size"))
-        .flatMap((section) => claimsIn(section))
-        .map((claim) => `${name}: ${claim}`)
-    );
-    expect(unescorted).toEqual([]);
+    expect(unescortedIn(docs)).toEqual([]);
+  });
+
+  it("exempts the runner route by its mechanism, not by the word hardware", () => {
+    // The corpus pins one direction on its own — drop the exemption and
+    // argent-screenshot-diff's physical-iPhone paragraph goes unescorted. The
+    // other direction has nothing standing under it: widening the exemption to
+    // "hardware" would silently excuse an Android phone, which captures through
+    // the simulator-server and is rejected by it exactly as an emulator is.
+    const runner =
+      "A live capture on hardware goes through the on-device runner at full resolution.";
+    const hardware = "A live capture on hardware is at full resolution.";
+    expect(unescortedIn([{ name: "d", text: runner }])).toEqual([]);
+    expect(unescortedIn([{ name: "d", text: hardware }])).toEqual([`d: ${hardware}`]);
   });
 
   it("names the way out wherever it names the rejection", () => {
