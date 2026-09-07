@@ -35,6 +35,7 @@ import {
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   isNixStorePath,
+  ownershipRemedy,
   globalInstallPresent,
   npmGlobalPackageRoot,
   blockedGlobalBinDir,
@@ -689,6 +690,40 @@ describe("a package manager's answer argent cannot use", () => {
     fs.mkdirSync(packageDir, { recursive: true });
 
     expect(probeGlobalInstallTarget("npm", packageDir)?.dir).toBe(path.dirname(packageDir));
+  });
+});
+
+describe("ownershipRemedy", () => {
+  const home = os.homedir();
+  const chownLine = (text: string | null): string | null =>
+    text === null ? null : plain(text).split("\n")[1].trim();
+
+  it("offers the chown for the scope directory an earlier sudo install left behind", () => {
+    const dir = path.join(home, ".npm-global", "lib", "node_modules", "@swmansion");
+
+    expect(chownLine(ownershipRemedy(dir, path.dirname(dir)))).toBe(
+      `sudo chown -R $(whoami) '${dir}'`
+    );
+  });
+
+  // A probe reports the nearest EXISTING ancestor, so a manager that has never
+  // created its global directory reports one above it. `~/.config` is what a
+  // `yarn global dir` yarn never made walks up to, and it holds every other
+  // program's configuration.
+  it("refuses a directory the manager merely needs to exist, above the one it named", () => {
+    const dir = path.join(home, ".config");
+    const root = path.join(dir, "yarn", "global");
+
+    expect(ownershipRemedy(dir, root)).toBeNull();
+  });
+
+  it("refuses the home directory itself", () => {
+    expect(ownershipRemedy(home, home)).toBeNull();
+  });
+
+  // Shared with every other command on the machine.
+  it("refuses a system directory outside any node_modules tree", () => {
+    expect(ownershipRemedy("/usr/local/bin", "/usr/local/bin")).toBeNull();
   });
 });
 
