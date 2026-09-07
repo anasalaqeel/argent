@@ -24,10 +24,11 @@ const zodSchema = z.object({
     .max(200)
     .optional()
     .describe(
-      "Device id (iOS udid / Android serial) the variants were captured on. The preview window " +
-        "streams THIS device directly — pass the same udid you screenshotted/described with, so " +
-        "the human never has to pick a simulator. Set it on the first propose_variant of a round; " +
-        "later calls may omit it (the last non-empty value wins)."
+      "Device id (iOS udid / Android serial) the variant is showing on. The tool captures the " +
+        "preview from THIS device, and the preview window then streams it directly, so the human " +
+        "never has to pick a simulator. The last non-empty value is remembered and reused when a " +
+        "later call omits it — including in a later round, so pass it whenever the device could " +
+        "have changed rather than capturing from the previous one."
     ),
   match: z
     .object({
@@ -128,7 +129,8 @@ line connecting it to the matched on-screen element; you don't open or display a
 
 Apply the variant on the device and call this while it is on screen: the tool screenshots the device
 for you and reads the element's crop frame from a live describe, so you need no separate screenshot
-call. Pass variant.previewImage only to override that capture.
+call. variant.previewImage overrides the screenshot and variant.frame overrides the crop frame; pass
+them only when the variant cannot be on screen right now.
 
 When you have proposed every variant for every element, you are done staging — the human reviews them
 in the Argent Lens window and sends back their picks and comments. If an \`await_user_selection\` tool
@@ -139,7 +141,8 @@ Returns { round, elementId, variantId, element, variantCount, totalElements } �
 it does not wait for the user.
 Fails when no device is known for a capture (no udid was ever set this session and no
 variant.previewImage), when the screenshot cannot be taken, and when the capture is byte-identical to
-another variant of the same element — that variant is not on screen, so re-apply it before proposing.`,
+another variant of the same element — nothing changed on screen between the two, so re-apply the
+variant before proposing.`,
     searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,
     services: () => ({}),
@@ -165,21 +168,10 @@ another variant of the same element — that variant is not on screen, so re-app
           includeImageInContext: false,
         });
         previewImage = shot.image.hostPath;
+        // Compared against the card's other variants by `proposeVariant` itself,
+        // which stages under the same synchronous step so a second propose landing
+        // during the describe below cannot slip past the comparison.
         previewHash = await sha256File(previewImage);
-        const twin = variantProposalStore.findDuplicatePreview({
-          element: params.element,
-          match: params.match,
-          previewHash,
-        });
-        if (twin) {
-          throw new InvalidToolInputError(
-            `The screen is byte-identical to the one captured for variant "${twin}" of ` +
-              `"${params.element}", so "${params.variant.name}" is not on screen and both cards ` +
-              `would show the same thumbnail. Apply this variant on the device (reload the bundle, ` +
-              `navigate back to the element) and propose again, or pass variant.previewImage if the ` +
-              `preview cannot come from the device right now.`
-          );
-        }
       }
 
       // Describe NOW — the variant is on screen at propose time — so each variant

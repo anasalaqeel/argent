@@ -17,10 +17,21 @@ import * as path from "node:path";
 import { z } from "zod";
 import { Registry } from "@argent/registry";
 
-// captureElementFrame shells `xcrun`/`adb` at propose time; the frame is not
-// what these test.
+// captureElementFrame shells `xcrun`/`adb` at propose time. Stubbed, but the
+// stub records the device it was handed and can be made to park: the real one
+// awaits a describe (up to CAPTURE_BUDGET_MS), and that await is the window two
+// overlapping proposes would race through.
+const frameStub = vi.hoisted(() => ({
+  udids: [] as string[],
+  delayMs: 0,
+  frame: null as null | { x: number; y: number; width: number; height: number },
+}));
 vi.mock("../src/utils/match-element-frame", () => ({
-  captureElementFrame: vi.fn(async () => null),
+  captureElementFrame: vi.fn(async (_registry: unknown, udid: string) => {
+    frameStub.udids.push(udid);
+    if (frameStub.delayMs) await new Promise((r) => setTimeout(r, frameStub.delayMs));
+    return frameStub.frame;
+  }),
 }));
 
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-lens-preview-test-"));
@@ -99,7 +110,12 @@ const variant = (name: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  frameStub.udids = [];
+  frameStub.delayMs = 0;
+  frameStub.frame = null;
+});
 
 describe("propose_variant — server-side preview capture", () => {
   it("screenshots the device when variant.previewImage is omitted", async () => {
@@ -147,6 +163,44 @@ describe("propose_variant — server-side preview capture", () => {
     });
 
     expect(shotCalls.map((c) => c.udid)).toEqual(["SIM-1", "SIM-1"]);
+    // The crop frame resolves the device the same way, so the second propose
+    // describes the round's device instead of silently getting no frame.
+    expect(frameStub.udids).toEqual(["SIM-1", "SIM-1"]);
+  });
+
+  it("prefers an explicitly passed udid over the stored device", async () => {
+    const { registry, shotCalls } = await freshLens([
+      shotFile("dev-a", "screen-a"),
+      shotFile("dev-b", "screen-b"),
+    ]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      variant: variant("Outlined"),
+    });
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-2",
+      variant: variant("Pill"),
+    });
+
+    expect(shotCalls.map((c) => c.udid)).toEqual(["SIM-1", "SIM-2"]);
+    expect(frameStub.udids).toEqual(["SIM-1", "SIM-2"]);
+  });
+
+  it("puts the auto-captured frame on the staged variant", async () => {
+    frameStub.frame = { x: 0.1, y: 0.2, width: 0.3, height: 0.4 };
+    const { registry, store } = await freshLens([shotFile("framed", "framed-pixels")]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      variant: variant("Outlined"),
+    });
+
+    const [proposal] = store.snapshot().proposals;
+    expect(proposal!.variants[0]!.frame).toEqual({ x: 0.1, y: 0.2, width: 0.3, height: 0.4 });
   });
 
   it("refuses, staging nothing, when no device is known and no previewImage is given", async () => {
@@ -274,6 +328,83 @@ describe("propose_variant — duplicate-capture guard", () => {
 
     const [proposal] = store.snapshot().proposals;
     expect(proposal!.variants.map((v) => v.name)).toEqual(["Outlined", "Pill"]);
+  });
+
+  it("refuses both-staging when two proposes of one element overlap across the describe", async () => {
+    // The compare and the append are one synchronous step inside the store. If
+    // the tool compared before `captureElementFrame`, both of these would pass
+    // that check during the park and both would stage the same thumbnail.
+    const first = shotFile("race-a", "identical-screen");
+    const second = shotFile("race-b", "identical-screen");
+    const { registry, store } = await freshLens([first, second]);
+    frameStub.delayMs = 50;
+
+    const results = await Promise.allSettled([
+      registry.invokeTool("propose_variant", {
+        element: "Search field",
+        udid: "SIM-1",
+        variant: variant("Outlined"),
+      }),
+      registry.invokeTool("propose_variant", {
+        element: "Search field",
+        udid: "SIM-1",
+        variant: variant("Pill"),
+      }),
+    ]);
+
+    expect(results.map((r) => r.status).sort()).toEqual(["fulfilled", "rejected"]);
+    const [proposal] = store.snapshot().proposals;
+    expect(proposal!.variants).toHaveLength(1);
+  });
+
+  it("tells an agent re-proposing the same variant that it is already staged", async () => {
+    const first = shotFile("same-a", "identical-screen");
+    const second = shotFile("same-b", "identical-screen");
+    const { registry, store } = await freshLens([first, second]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      variant: variant("Outlined"),
+    });
+    // Re-proposing the SAME variant is not evidence that it is off screen — it
+    // is on screen, and staged. Saying "not on screen, re-apply it" would send
+    // the agent round a loop whose remedy cannot change the capture.
+    await expect(
+      registry.invokeTool("propose_variant", {
+        element: "Search field",
+        udid: "SIM-1",
+        variant: variant("Outlined"),
+      })
+    ).rejects.toThrow(/"Outlined" of "Search field" is already staged/i);
+
+    const [proposal] = store.snapshot().proposals;
+    expect(proposal!.variants.map((v) => v.name)).toEqual(["Outlined"]);
+  });
+
+  it("names the card the twin is actually on, not the element of the refused call", async () => {
+    // One matcher is one card, so these two names collapse onto "Save button".
+    // Reporting the refused call's own `element` would name a card that does not
+    // hold the twin — and does not exist.
+    const first = shotFile("attrib-a", "identical-screen");
+    const second = shotFile("attrib-b", "identical-screen");
+    const { registry } = await freshLens([first, second]);
+    const match = { by: "role" as const, value: "Button" };
+
+    await registry.invokeTool("propose_variant", {
+      element: "Save button",
+      udid: "SIM-1",
+      match,
+      variant: variant("Solid"),
+    });
+    await expect(
+      registry.invokeTool("propose_variant", {
+        element: "Cancel button",
+        udid: "SIM-1",
+        match,
+        variant: variant("Ghost"),
+      })
+    ).rejects.toThrow(/variant "Solid" of "Save button"/);
   });
 
   it("dup-checks one element across case- and whitespace-divergent matchers", async () => {

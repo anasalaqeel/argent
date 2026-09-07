@@ -13,6 +13,7 @@
  */
 
 import { TypedEventEmitter } from "@argent/registry";
+import { InvalidToolInputError } from "./capability";
 import { classifyDeviceForTelemetry, type TelemetryPlatform } from "./telemetry-platform";
 
 /** How the preview UI locates the live on-screen element for a proposal. */
@@ -459,29 +460,6 @@ export class VariantProposalStore {
     if (this.completed) this.reset();
   }
 
-  /**
-   * Name of the variant already on this element whose server-captured preview
-   * has the same bytes, or null. A byte-identical capture means the screen did
-   * not change between the two variants, so the two cards would show the same
-   * thumbnail — the failure the Lens exists to avoid.
-   *
-   * Scoped to ONE element deliberately: two elements of the same screen legitimately
-   * share a capture, each card cropping it to its own `frame`.
-   *
-   * A completed round compares against nothing: the next `proposeVariant` rolls
-   * it away, so its variants are not the ones the new capture would sit beside.
-   */
-  findDuplicatePreview(input: {
-    element: string;
-    match?: VariantMatch;
-    previewHash: string;
-  }): string | null {
-    if (this.completed) return null;
-    const key = proposalKey(matchFor(input));
-    const proposal = this.proposals.find((p) => proposalKey(p.match) === key);
-    return proposal?.variants.find((v) => v.previewHash === input.previewHash)?.name ?? null;
-  }
-
   proposeVariant(input: {
     element: string;
     match?: VariantMatch;
@@ -512,6 +490,34 @@ export class VariantProposalStore {
     const key = proposalKey(match);
 
     let proposal = this.proposals.find((p) => proposalKey(p.match) === key);
+    // Byte-identical to a variant already on this card means the screen did not
+    // change between the two, so both would show one thumbnail — the failure the
+    // Lens exists to avoid. Checked here rather than by the caller so the compare
+    // and the append are one synchronous step: the caller reaches this only after
+    // awaiting a screenshot and a describe, and two proposes overlapping across
+    // those awaits would both pass an earlier check and both stage.
+    //
+    // Scoped to one card deliberately: two elements of the same screen legitimately
+    // share a capture, each cropping it to its own `frame`. A hash is present only
+    // when `propose_variant` captured the screen itself, so an agent-supplied
+    // `previewImage` is never compared. A completed round was rolled away above,
+    // so its variants are not the ones this capture would sit beside.
+    const hash = input.variant.previewHash;
+    const twin = hash ? proposal?.variants.find((v) => v.previewHash === hash) : undefined;
+    if (proposal && twin) {
+      throw new InvalidToolInputError(
+        twin.name === input.variant.name
+          ? `Variant "${twin.name}" of "${proposal.element}" is already staged from this exact ` +
+              `screen, so proposing it again would add a second card showing the same thumbnail. ` +
+              `If this repeats a call that already succeeded, it is staged — carry on. If it is a ` +
+              `different variant, give it its own name and apply it on the device first.`
+          : `The screen is byte-identical to the one captured for variant "${twin.name}" of ` +
+              `"${proposal.element}", so "${input.variant.name}" is not on screen and both cards ` +
+              `would show the same thumbnail. Apply this variant on the device (reload the bundle, ` +
+              `navigate back to the element) and propose again, or pass variant.previewImage if the ` +
+              `preview cannot come from the device right now.`
+      );
+    }
     if (!proposal) {
       proposal = {
         id: `el-${slug(input.element) || "element"}-${this.proposals.length + 1}`,
