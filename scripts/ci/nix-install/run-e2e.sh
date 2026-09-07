@@ -142,39 +142,48 @@ PTY_COLUMNS=200
 PTY_PROMPT_TIMEOUT=180
 PTY_RUN_TIMEOUT=300
 
+# The command reports its own status through the transcript rather than through
+# `script`, whose exit cannot be waited on here: util-linux keeps polling until
+# its stdin closes, and the answers below are what hold it open, so waiting for
+# `script` before closing them is a deadlock. Measured on ubuntu-latest, where a
+# run that had finished all its work sat until the ceiling below.
+PTY_DONE="PTY_EXIT:"
+
+# Poll `out` until `marker` shows up in it, giving up after `limit` polls.
+pty_await() {
+  local out="$1" marker="$2" limit="$3" waited=0
+  until found "$out" "$marker"; do
+    waited=$((waited + 1))
+    [[ "$waited" -le "$limit" ]] || return 1
+    sleep 0.2
+  done
+}
+
 # One answer per prompt, each held back until that prompt has rendered: the
 # `out` this reads is the transcript `script` is writing as it goes. Piping the
 # whole sequence in up front does not work: a prompt only sees what arrives
 # after it attaches its own keypress listener, and the pty drops what it queued
 # before that. Answers go to stdout, diagnostics to stderr: stdout is the pty.
 pty_feed() {
-  local out="$1" flag="$2"
-  shift 2
+  local out="$1"
+  shift
   while [[ "$#" -ge 2 ]]; do
-    local waited=0
-    until found "$out" "$1"; do
-      waited=$((waited + 1))
-      if [[ "$waited" -gt $((PTY_PROMPT_TIMEOUT * 5)) ]]; then
-        printf '  ! prompt never rendered: %s\n' "$1" >&2
-        return 1
-      fi
-      sleep 0.2
-    done
+    if ! pty_await "$out" "$1" $((PTY_PROMPT_TIMEOUT * 5)); then
+      printf '  ! prompt never rendered: %s\n' "$1" >&2
+      return 1
+    fi
     printf '%s' "$2"
     shift 2
   done
-  # Stdout stays open until pty_run drops `flag`: `script` turns its own stdin
+  # Stdout stays open until the command is done: `script` turns its own stdin
   # EOF into a keystroke, which would answer whatever prompt is still up.
-  local held=0
-  while [[ -e "$flag" ]] && [[ "$held" -lt $((PTY_RUN_TIMEOUT * 5)) ]]; do
-    held=$((held + 1))
-    sleep 0.2
-  done
+  pty_await "$out" "$PTY_DONE" $((PTY_RUN_TIMEOUT * 5)) || true
 }
 
 # Run `cmd` on a pty, answering its prompts from the marker/keystroke pairs that
 # follow. The transcript lands in `out`, which the assertions read exactly as
-# they read every other scenario's log. Returns the command's own exit code.
+# they read every other scenario's log. Returns the command's own exit code,
+# taken from the line it prints rather than from `script`.
 #
 # The answers arrive over a pipe rather than a named fifo: BSD script refuses a
 # fifo on stdin outright ("tcgetattr/ioctl: Operation not supported").
@@ -182,39 +191,42 @@ pty_run() {
   local out="$1" cmd="$2"
   shift 2
   : >"$out"
-  local flag="$out.driving"
-  : >"$flag"
 
-  # util-linux takes the command behind --command and needs --return to exit
-  # with the child's status; BSD script takes it as trailing arguments and exits
-  # with that status anyway. Only util-linux answers --version.
-  local sized="stty rows $PTY_ROWS cols $PTY_COLUMNS 2>/dev/null; $cmd"
+  # `\$?` so the status is the command's, read inside the pty, not this shell's.
+  local sized="stty rows $PTY_ROWS cols $PTY_COLUMNS 2>/dev/null; $cmd; printf '\\n%s%s\\n' '$PTY_DONE' \$?"
+  # util-linux takes the command behind --command, BSD script as trailing
+  # arguments after the transcript. Only util-linux answers --version, which is
+  # how the two are told apart.
   if script --version >/dev/null 2>&1; then
     script --quiet --return --flush --command "$sized" "$out" \
-      < <(pty_feed "$out" "$flag" "$@") >/dev/null 2>&1 &
+      < <(pty_feed "$out" "$@") >/dev/null 2>&1 &
   else
     script -q -F "$out" /bin/bash -c "$sized" \
-      < <(pty_feed "$out" "$flag" "$@") >/dev/null 2>&1 &
+      < <(pty_feed "$out" "$@") >/dev/null 2>&1 &
   fi
   local runner="$!"
 
   # A prompt these pairs do not answer would otherwise hold the pty until the
   # job's own timeout, with nothing naming the scenario that stalled.
-  local waited=0
-  while kill -0 "$runner" 2>/dev/null; do
-    if [[ "$waited" -gt $((PTY_RUN_TIMEOUT * 5)) ]]; then
-      fail "the run under the pty did not finish within ${PTY_RUN_TIMEOUT}s"
-      kill -9 "$runner" 2>/dev/null
-      break
-    fi
-    waited=$((waited + 1))
+  if ! pty_await "$out" "$PTY_DONE" $((PTY_RUN_TIMEOUT * 5)); then
+    fail "the run under the pty did not finish within ${PTY_RUN_TIMEOUT}s"
+    kill -9 "$runner" 2>/dev/null
+    wait "$runner" 2>/dev/null
+    return 1
+  fi
+
+  # The command is done; `script` has its own reasons for still being up (a pty
+  # nothing has closed yet), and none of them are this scenario's business.
+  local settling=0
+  while kill -0 "$runner" 2>/dev/null && [[ "$settling" -lt 50 ]]; do
+    settling=$((settling + 1))
     sleep 0.2
   done
-  wait "$runner"
-  local rc="$?"
-
-  rm -f "$flag"
-  return "$rc"
+  kill -9 "$runner" 2>/dev/null
+  wait "$runner" 2>/dev/null
+  local rc
+  rc="$(plain "$out" | sed -n "s/.*$PTY_DONE\\([0-9][0-9]*\\).*/\\1/p" | tail -1)"
+  return "${rc:-1}"
 }
 
 # ── Preconditions ─────────────────────────────────────────────────────────────
