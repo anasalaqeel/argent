@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
 import { shellQuotePath, type PackageManager } from "./package-manager.js";
+import { isGloballyInstalled } from "./topology.js";
 
 // Where a package manager puts global installs, and whether this user can write
 // there. Nix-managed toolchains are the motivating case: npm derives its global
@@ -325,6 +326,44 @@ export function npmGlobalBinDir(): string | null {
 export function npmGlobalPackagePath(): string | null {
   const root = queryAbsolutePath("npm", GLOBAL_DIR_QUERY.npm);
   return root === null ? null : path.join(root, PACKAGE_NAME);
+}
+
+/**
+ * Where npm's global install of {@link PACKAGE_NAME} really sits, resolved
+ * through the link npm made, or null when npm holds no install there. The
+ * manifest name is checked for the reason {@link getGloballyInstalledPackageRoot}
+ * checks it: a leftover or half-removed directory is not an install, and
+ * counting one answers "is argent still here" with yes forever.
+ */
+export function npmGlobalPackageRoot(): string | null {
+  const entry = npmGlobalPackagePath();
+  if (entry === null) return null;
+  let root: string;
+  try {
+    root = fs.realpathSync(entry);
+  } catch {
+    // A link whose target is gone is still npm's entry, but nothing is
+    // installed behind it.
+    return null;
+  }
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+      name?: string;
+    };
+    return pkg.name === PACKAGE_NAME ? root : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Any global install on this machine: PATH's answer, or npm's. PATH alone is
+ * not enough — the prefix recovery `argent init` performs installs into a bin
+ * directory the user's shells do not know about until their profile is edited,
+ * and an install nobody can see yet is still an install.
+ */
+export function globalInstallPresent(): boolean {
+  return isGloballyInstalled() || npmGlobalPackageRoot() !== null;
 }
 
 /** What a printed remedy may assume about the machine it is printed on. */
