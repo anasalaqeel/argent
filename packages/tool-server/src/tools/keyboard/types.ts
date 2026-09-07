@@ -50,10 +50,14 @@ export interface KeyboardResult {
    *   subcommand takes the measured delete path instead of silently degrading
    *   to a one-character backspace. On a level that HAS the subcommand it also
    *   reads the field back afterwards and deletes whatever the select-all left
-   *   behind — a widget that swallows the chord does not leave the field one
-   *   character shorter under a `cleared: true`. The read-back rides the
-   *   screen's view hierarchy: where that cannot be captured (a refused screen,
-   *   an unmeasurable password field) the clear stays best-effort like iOS.
+   *   behind, so a swallowed chord over a single-line field it can read does
+   *   not leave that field one character shorter under a `cleared: true`. Three
+   *   things escape the repair: the read-back rides the screen's view
+   *   hierarchy, so a screen it cannot capture degrades to best-effort like
+   *   iOS; it measures focused `EditText` nodes only, so a password box, a
+   *   WebView input or a custom widget gets no repair at all; and the repair
+   *   deletes backwards from end-of-LINE, so a multi-line field keeps what sits
+   *   below the caret.
    * - The iOS HID transport is fire-and-forget and cannot read the field at
    *   all: `cleared: true` means the chord was dispatched, nothing more.
    *

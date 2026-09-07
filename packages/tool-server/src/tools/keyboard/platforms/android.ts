@@ -90,9 +90,10 @@ function typeAndroidPhone(
   // Serialized per device, because the clear holds a SELECTION across awaits:
   // the modern path issues `input keycombination` and `input keyevent` as two
   // separate adb invocations, so between them the field is fully selected, and
-  // the text that follows is a third. A concurrent call landing anywhere in
-  // there types over that selection. See `serializePerDevice`, where the
-  // measurements are — 4 of 4 corrupt on API 36 with both calls reporting 200.
+  // a read-back and the rescue run it can call for still precede the text. A
+  // concurrent call landing anywhere in there types over that selection. See
+  // `serializePerDevice`, where the measurements are — 4 of 4 corrupt on API 36
+  // with both calls reporting 200.
   return serializePerDevice(deviceChainKey(device.id), () => {
     // Checked HERE, as this call's turn comes round, so a request the client has
     // already abandoned does not spend the device's keyboard — it leaves the

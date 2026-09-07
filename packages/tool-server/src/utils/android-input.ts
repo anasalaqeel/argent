@@ -364,21 +364,24 @@ export async function injectAndroidClear(
       timeoutMs: Math.min(ADB_INPUT_TIMEOUT_MS, clearLegTimeout(deadline)),
     });
   } catch (cause) {
-    // The select-all has already been applied, and it SURVIVES the killed delete
-    // — verified on API 36: after this leg was SIGKILLed the field still held its
-    // whole value, and the next character typed into it replaced the lot. So the
-    // field is in one of two states and the caller cannot tell which, which is
-    // the same report the legacy path's delete run gives. `adbShell`'s own error
-    // is filed under ANDROID_ADB_COMMAND_FAILED and says only that
-    // `input keyevent 67` was killed, so a caller reads a transport fault and
-    // retries against a field it believes is untouched.
+    // A select-all that TOOK survives the killed delete — verified on API 36:
+    // after this leg was SIGKILLed the field still held its whole value, and the
+    // next character typed into it replaced the lot. Whether it took is the one
+    // thing this device cannot be asked, and a delete already handed over keeps
+    // landing after adb is killed, so three states reach here and the caller
+    // cannot tell which — the same shape of report the legacy path's delete run
+    // gives. `adbShell`'s own error is filed under ANDROID_ADB_COMMAND_FAILED
+    // and says only that `input keyevent 67` was killed, so a caller reads a
+    // transport fault and retries against a field it believes is untouched.
     throw new FailureError(
       `keyboard clear: the delete did not finish on this device, so the focused field is ` +
-        `either empty or still holding its whole value — selected or not: \`input\` exits 0 ` +
-        `whether or not the select-all took, so the next character typed either replaces a ` +
-        `live selection or lands at the caret against the intact value. Nothing was typed. ` +
-        `Read the field's actual contents before continuing; do not treat it as unchanged, ` +
-        `and do not send a replacement that assumes it is empty.`,
+        `empty, still holding its whole value — selected or not, since \`input\` exits 0 ` +
+        `whether or not the select-all took — or one character shorter, since a delete ` +
+        `already handed to the device keeps landing after adb is killed. The next character ` +
+        `typed therefore either replaces a live selection or lands at the caret against ` +
+        `whatever survived. Nothing was typed. Read the field's actual contents before ` +
+        `continuing; do not treat it as unchanged, and do not send a replacement that ` +
+        `assumes it is empty.`,
       {
         error_code: FAILURE_CODES.KEYBOARD_CLEAR_INTERRUPTED,
         failure_stage: "keyboard_clear_delete_android",
@@ -414,6 +417,14 @@ export async function injectAndroidClear(
   // read: without it a focused password field floors to BLIND_DELETE_COUNT (see
   // the measurement), so every successful clear of a credential box would read
   // 150 back and fire a 158-keyevent run into the field just emptied.
+  //
+  // Two shapes the rescue does not cover, both still reported as cleared: the
+  // measurement counts focused `EditText` nodes only, so an editable the dump
+  // reports as anything else — a WebView input, a fully custom widget — reads
+  // as unreadable and no rescue follows at all; and the rescue is
+  // `clearByDeleting`, whose `KEYCODE_MOVE_END` is end-of-LINE, so a multi-line
+  // field is emptied only down to the end of the caret's line. Both are on the
+  // `clear` parameter and the `cleared` docstring.
   const residue = await measureFocusedTextLength(serial, deadline, options.readHierarchy, 1, true);
   if (residue !== undefined && residue > 0) {
     await clearByDeleting(serial, deadline, options, residue);
@@ -521,8 +532,10 @@ const BLIND_DELETE_COUNT = MAX_DELETE_COUNT;
  *
  * Known limit, and the reason the select-all is tried first rather than this:
  * `KEYCODE_MOVE_END` is end-of-LINE, not end-of-buffer, so a multi-line field
- * keeps whatever sits below the caret. Single-line inputs — every login, search
- * and form field — are emptied exactly.
+ * keeps whatever sits below the caret. The rescue does not escape it — a
+ * swallowed chord over a multi-line field is repaired only down to the end of
+ * the caret's line, and still reported as cleared. Single-line inputs — every
+ * login, search and form field — are emptied exactly.
  *
  * Measured on an API 30 emulator: 150 keys against the live-filtering Settings
  * search box took 6.9s wall-clock and emptied it; against an idle field the same
@@ -561,17 +574,19 @@ async function clearByDeleting(
     // reached only after a select-all and a DEL went out. Telling a caller
     // nothing was modified there would be unjustified — the DEL removes one
     // character wherever it lands — and "use a newer API level" would be no
-    // remedy at all, since the level already has the subcommand. The mutation is
-    // hedged rather than asserted because the reading behind this refusal can be
-    // another window's field or a placeholder (see measureFocusedTextLength), so
-    // the code cannot know what the DEL actually took.
+    // remedy at all, since the level already has the subcommand. Neither the
+    // cause nor the mutation is ASSERTED on that arm: the reading behind this
+    // refusal can be another window's field or an empty field's placeholder (see
+    // measureFocusedTextLength), so it establishes neither that the chord failed
+    // nor what the DEL took — only that something focused on screen read back
+    // too long to backspace away.
     const why =
       rescueFrom === undefined
         ? `Without \`input keycombination\` (added after API 30) the only available clear is ` +
           `one backspace per character, which is too slow to finish reliably past ` +
           `${MAX_DELETE_COUNT}.`
-        : `The select-all did not take on this field, leaving one backspace per character as ` +
-          `the only clear available, which is too slow to finish reliably past ` +
+        : `The field read back non-empty after the select-all, leaving one backspace per ` +
+          `character as the only clear available, which is too slow to finish reliably past ` +
           `${MAX_DELETE_COUNT}.`;
     const state =
       rescueFrom === undefined

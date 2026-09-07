@@ -729,6 +729,11 @@ describe("keyboard clear — Android (adb input)", () => {
     expect((err as Error).message).not.toContain("Nothing was modified");
     expect((err as Error).message).not.toContain("HAS been modified");
     expect((err as Error).message).not.toContain("newer API level");
+    // The CAUSE is hedged for the same reason as the mutation: this reading is
+    // the longest focused EditText on screen, so it cannot establish that the
+    // chord failed either — only that something read back too long.
+    expect((err as Error).message).toContain("read back non-empty after the select-all");
+    expect((err as Error).message).not.toContain("select-all did not take");
     // Refused rather than half-deleted: no run was started.
     expect(inputCmds()).toEqual([SELECT_ALL_CMD, DEL_CMD]);
   });
@@ -848,6 +853,10 @@ describe("keyboard clear — Android (adb input)", () => {
     // The kind is carried through, so a killed leg still reads as a timeout.
     expect(getFailureSignal(err)?.error_kind).toBe("timeout");
     expect(err.message).toMatch(/selected or not/);
+    // A DEL already handed over lands even once adb is killed, so on a widget
+    // that swallowed the chord the field is one character short — a third state,
+    // neither of the two a two-way enumeration would name.
+    expect(err.message).toMatch(/one character shorter/);
     expect(err.message).not.toMatch(/input keyevent/);
     // Refused before the typing: the replacement must not land on a selection.
     expect(inputCmds().some((cmd) => cmd.includes("input text"))).toBe(false);
@@ -1093,6 +1102,29 @@ describe("keyboard clear — Android (adb input)", () => {
           }),
         })),
       }) as never;
+
+    it("reads the select-all back through the helper, not only through the dump", async () => {
+      // Every other positive-residue case seeds the read-back through the dump,
+      // which on the ordinary `describe` → tap → `keyboard` order is the source
+      // that CANNOT answer: the helper holds the UiAutomation connection and the
+      // dump comes back `Killed`. Dropping `options.readHierarchy` from the
+      // verify read would therefore disable the repair in exactly the state the
+      // option exists for, while every dump-seeded case above stayed green.
+      const getHierarchy = vi.fn(async () => ({ xml: dumpWith("Monda") }));
+
+      await makeAndroidImpl(registryWithDevtools(getHierarchy)).handler(
+        {},
+        { udid: ANDROID.id, clear: true },
+        ANDROID
+      );
+
+      expect(getHierarchy).toHaveBeenCalledTimes(1);
+      expect(getHierarchy).toHaveBeenCalledWith({ clearCache: true });
+      // Answered by the helper, so no dump was raced against it.
+      expect(adbExecOutBinary).not.toHaveBeenCalled();
+      expect(inputCmds().slice(0, 2)).toEqual([SELECT_ALL_CMD, DEL_CMD]);
+      expect(deleteRun(inputCmds()[2]!)).toHaveLength(5 + 8);
+    });
 
     it("measures from the helper, without racing it for a dump", async () => {
       seedLegacyLevel();
