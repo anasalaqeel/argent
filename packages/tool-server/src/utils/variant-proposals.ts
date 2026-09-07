@@ -41,8 +41,9 @@ interface Variant {
   previewImage?: string;
   /**
    * Content hash of `previewImage`, set only when `propose_variant` captured the
-   * screen itself. `findDuplicatePreview` compares against it; an agent-supplied
-   * `previewImage` is never hashed, so it carries none.
+   * screen itself. `proposeVariant` refuses a capture matching another variant of
+   * the same card by it; an agent-supplied `previewImage` is never hashed, so it
+   * carries none and is never compared.
    */
   previewHash?: string;
   /**
@@ -286,6 +287,10 @@ function slug(s: string): string {
     .slice(0, 40);
 }
 
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 /** Identity of the element a proposal targets: variants merge onto one card by it. */
 function proposalKey(match: VariantMatch): string {
   return `${match.by}:${match.value.trim().toLowerCase()}`;
@@ -505,17 +510,26 @@ export class VariantProposalStore {
     const hash = input.variant.previewHash;
     const twin = hash ? proposal?.variants.find((v) => v.previewHash === hash) : undefined;
     if (proposal && twin) {
+      const twinOf = `variant "${twin.name}" of "${proposal.element}"`;
       throw new InvalidToolInputError(
-        twin.name === input.variant.name
-          ? `Variant "${twin.name}" of "${proposal.element}" is already staged from this exact ` +
-              `screen, so proposing it again would add a second card showing the same thumbnail. ` +
-              `If this repeats a call that already succeeded, it is staged — carry on. If it is a ` +
-              `different variant, give it its own name and apply it on the device first.`
-          : `The screen is byte-identical to the one captured for variant "${twin.name}" of ` +
-              `"${proposal.element}", so "${input.variant.name}" is not on screen and both cards ` +
-              `would show the same thumbnail. Apply this variant on the device (reload the bundle, ` +
-              `navigate back to the element) and propose again, or pass variant.previewImage if the ` +
-              `preview cannot come from the device right now.`
+        // A matcher is a card, so a second `element` name reusing one matcher is
+        // not a second element — the collision is the matcher, and no amount of
+        // re-applying on the device can resolve it.
+        proposal.element !== input.element
+          ? `"${input.element}" and "${proposal.element}" share the matcher ` +
+              `${match.by} "${match.value}", so they are one card, and this capture is ` +
+              `byte-identical to ${twinOf} on it. Give each element its own \`match\` so they ` +
+              `get their own cards.`
+          : twin.name === input.variant.name
+            ? `${capitalize(twinOf)} is already staged from this exact screen, so proposing it ` +
+              `again would add a second variant showing the same thumbnail. If this repeats a ` +
+              `call that already succeeded, it is staged — carry on. If it is a different ` +
+              `variant, give it its own name and apply it on the device first.`
+            : `The screen is byte-identical to the one captured for ${twinOf}, so ` +
+              `"${input.variant.name}" is not on screen and both variants would show the same ` +
+              `thumbnail. Apply this variant on the device (reload the bundle, navigate back to ` +
+              `the element) and propose again, or pass variant.previewImage if the preview ` +
+              `cannot come from the device right now.`
       );
     }
     if (!proposal) {

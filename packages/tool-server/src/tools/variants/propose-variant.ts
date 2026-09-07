@@ -141,8 +141,8 @@ Returns { round, elementId, variantId, element, variantCount, totalElements } â€
 it does not wait for the user.
 Fails when no device is known for a capture (no udid was ever set this session and no
 variant.previewImage), when the screenshot cannot be taken, and when the capture is byte-identical to
-another variant of the same element â€” nothing changed on screen between the two, so re-apply the
-variant before proposing.`,
+another variant of the same element: re-apply that variant on the device before proposing, unless the
+twin is this same variant, in which case it is already staged and there is nothing left to do.`,
     searchHint: "propose design variant alternative option for element non-blocking ab choice",
     zodSchema,
     services: () => ({}),

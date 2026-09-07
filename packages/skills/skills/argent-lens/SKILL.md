@@ -18,7 +18,7 @@ You implement several candidate designs and stage each one with `propose_variant
 | `propose_variant`      | No        | Stage ONE variant for ONE element. Call once per variant. Keep working. |
 | `await_user_selection` | Yes       | Call ONCE after every variant is staged. Parks until the human is done. |
 
-`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device the variants run on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards.
+`propose_variant` params: `element` (human name), optional `match` (`{ by: "text"|"label"|"identifier"|"role", value }`), optional `udid` (the device the variants run on), and `variant` (`{ name, summary, code?, filePath?, previewImage?, frame? }`). Repeated calls with the same `element` accumulate variants on that element; different `element` values create separate cards — as long as their matchers differ, since the matcher is what identifies a card.
 
 **Always pass `udid`** (the same simulator/emulator id you described with). It is the device `propose_variant` captures the preview from, and the preview window then streams _that_ device directly — the human never has to pick a simulator. Omitting it reuses the last one you passed, which persists across rounds: a `udid`-less propose after you switch devices captures the _old_ one and stages a preview of the wrong screen, with no error. Pass it on every call and that cannot happen. With no `udid` ever set and no `variant.previewImage`, `propose_variant` fails — it has nothing to capture from.
 
@@ -84,11 +84,11 @@ propose_variant { element: "Search field", udid,
   match: { by: "identifier", value: "search-input" },
   variant: { name: "Outlined", summary: "1pt border, transparent fill" } }
 # apply "Pill", then propose
-propose_variant { element: "Search field",
+propose_variant { element: "Search field", udid,
   match: { by: "identifier", value: "search-input" },
   variant: { name: "Pill", summary: "Fully rounded, filled grey" } }
 # apply "Gradient", then propose
-propose_variant { element: "Primary CTA",
+propose_variant { element: "Primary CTA", udid,
   match: { by: "label", value: "Get started" },
   variant: { name: "Gradient", summary: "Accent gradient fill" } }
 await_user_selection {}                             # ONE blocking call → human picks

@@ -391,16 +391,68 @@ describe("propose_variant — duplicate-capture guard", () => {
         udid: "SIM-1",
         variant: variant("Outlined"),
       })
-    ).rejects.toThrow(/"Outlined" of "Search field" is already staged/i);
+    ).rejects.toThrow(/Variant "Outlined" of "Search field" is already staged/);
 
     const [proposal] = store.snapshot().proposals;
     expect(proposal!.variants.map((v) => v.name)).toEqual(["Outlined"]);
   });
 
-  it("names the card the twin is actually on, not the element of the refused call", async () => {
+  it("names the twin's own card in the already-staged message", async () => {
+    // Same variant name, reached through a second element name on one matcher:
+    // the card is "Save button", so naming the refused call's own element would
+    // point at a card that does not exist.
+    const first = shotFile("staged-card-a", "identical-screen");
+    const second = shotFile("staged-card-b", "identical-screen");
+    const { registry } = await freshLens([first, second]);
+    const match = { by: "identifier" as const, value: "cta" };
+
+    await registry.invokeTool("propose_variant", {
+      element: "Save button",
+      udid: "SIM-1",
+      match,
+      variant: variant("Solid"),
+    });
+    const err = await registry
+      .invokeTool("propose_variant", {
+        element: "Save button",
+        udid: "SIM-1",
+        match,
+        variant: variant("Solid"),
+      })
+      .catch((e: Error) => e);
+
+    expect(String(err)).toMatch(/Variant "Solid" of "Save button" is already staged/);
+    expect(String(err)).toMatch(/second variant showing the same thumbnail/);
+  });
+
+  it("falls back to the stored device when udid is whitespace", async () => {
+    // `min(1)` admits "   ", so without the trim it would reach resolveDevice
+    // and the screenshot sub-tool instead of the device the round is on.
+    const { registry, store, shotCalls } = await freshLens([
+      shotFile("ws-1", "screen-one"),
+      shotFile("ws-2", "screen-two"),
+    ]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      variant: variant("Outlined"),
+    });
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "   ",
+      variant: variant("Pill"),
+    });
+
+    expect(shotCalls.map((c) => c.udid)).toEqual(["SIM-1", "SIM-1"]);
+    expect(frameStub.udids).toEqual(["SIM-1", "SIM-1"]);
+    expect(store.snapshot().device).toBe("SIM-1");
+  });
+
+  it("reports the matcher collision when two element names share one card", async () => {
     // One matcher is one card, so these two names collapse onto "Save button".
-    // Reporting the refused call's own `element` would name a card that does not
-    // hold the twin — and does not exist.
+    // Blaming the device would send the agent to re-apply a variant that is
+    // already on screen; the only fix is to give the elements distinct matchers.
     const first = shotFile("attrib-a", "identical-screen");
     const second = shotFile("attrib-b", "identical-screen");
     const { registry } = await freshLens([first, second]);
@@ -412,14 +464,22 @@ describe("propose_variant — duplicate-capture guard", () => {
       match,
       variant: variant("Solid"),
     });
-    await expect(
-      registry.invokeTool("propose_variant", {
+    const err = await registry
+      .invokeTool("propose_variant", {
         element: "Cancel button",
         udid: "SIM-1",
         match,
         variant: variant("Ghost"),
       })
-    ).rejects.toThrow(/variant "Solid" of "Save button"/);
+      .catch((e: Error) => e);
+
+    expect(String(err)).toMatch(
+      /"Cancel button" and "Save button" share the matcher role "Button"/
+    );
+    expect(String(err)).toMatch(/variant "Solid" of "Save button"/);
+    expect(String(err)).toMatch(/give each element its own `match`/i);
+    // The device is not the problem here, so it must not be the advice.
+    expect(String(err)).not.toMatch(/reload the bundle|is not on screen/);
   });
 
   it("dup-checks one element across case- and whitespace-divergent matchers", async () => {
