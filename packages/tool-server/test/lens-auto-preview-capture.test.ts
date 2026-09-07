@@ -147,6 +147,21 @@ describe("propose_variant — server-side preview capture", () => {
     expect(proposal!.variants[0]!.previewImage).toBe("/var/folders/x/agent-shot.png");
   });
 
+  it("treats a blank previewImage as absent and captures instead of staging it", async () => {
+    const shot = shotFile("blank-override", "captured-pixels");
+    const { registry, store, shotCalls } = await freshLens([shot]);
+
+    await registry.invokeTool("propose_variant", {
+      element: "Search field",
+      udid: "SIM-1",
+      variant: variant("Outlined", { previewImage: "   " }),
+    });
+
+    expect(shotCalls).toHaveLength(1);
+    const [proposal] = store.snapshot().proposals;
+    expect(proposal!.variants[0]!.previewImage).toBe(shot);
+  });
+
   it("captures from the round's device when a later propose omits udid", async () => {
     const first = shotFile("first", "variant-one");
     const second = shotFile("second", "variant-two");

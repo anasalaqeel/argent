@@ -150,7 +150,10 @@ variant before proposing.`,
       // A later propose of the round may omit `udid`; the device is still known.
       const udid = params.udid?.trim() || variantProposalStore.getDevice();
 
-      let previewImage = params.variant.previewImage;
+      // Trimmed like `udid` above: `min(1)` admits a blank string, and an
+      // untrimmed one would suppress the capture and then 404 in the preview
+      // window, which reads as "No preview" with nothing to explain it.
+      let previewImage = params.variant.previewImage?.trim() || undefined;
       let previewHash: string | undefined;
       if (!previewImage) {
         if (!udid) {
