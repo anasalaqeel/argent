@@ -14,6 +14,7 @@ import {
 import {
   probeGlobalInstallTarget,
   blockedGlobalBinDir,
+  provenUnwritableDir,
   blockedGlobalInstallMessage,
   npmGlobalBinDir,
 } from "../src/global-prefix.js";
@@ -60,6 +61,7 @@ vi.mock("../src/global-prefix.js", async (importOriginal) => {
     ...original,
     probeGlobalInstallTarget: vi.fn(),
     blockedGlobalBinDir: vi.fn(() => null),
+    provenUnwritableDir: vi.fn(() => null),
     blockedGlobalInstallMessage: vi.fn(() => null),
     npmGlobalBinDir: vi.fn(() => null),
   };
@@ -242,12 +244,14 @@ describe("installLocally failure handling", () => {
 describe("a global install whose target directory cannot be written", () => {
   const blocked = {
     dir: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
+    root: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
     blocked: true,
     nixStore: true,
   };
   // What the re-probe sees once `npm config set prefix` has run.
   const writableAfterMove = {
     dir: "/home/dev/.npm-global/lib/node_modules",
+    root: "/home/dev/.npm-global/lib/node_modules",
     blocked: false,
     nixStore: false,
   };
@@ -286,6 +290,7 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(hasProjectPackageJson).mockReturnValue(true);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(blocked);
     vi.mocked(blockedGlobalBinDir).mockReturnValue(null);
+    vi.mocked(provenUnwritableDir).mockReturnValue(null);
     vi.mocked(blockedGlobalInstallMessage).mockReturnValue(null);
     vi.mocked(npmGlobalBinDir).mockReturnValue(null);
     // Implementations outlive vi.clearAllMocks, so every mock a test in here
@@ -370,7 +375,7 @@ describe("a global install whose target directory cannot be written", () => {
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
     vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
-    vi.mocked(blockedGlobalBinDir).mockReturnValue(binDir);
+    vi.mocked(provenUnwritableDir).mockReturnValue(binDir);
 
     await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
 
@@ -381,12 +386,17 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands).toEqual([
       expect.objectContaining({ args: expect.arrayContaining(["config"]) }),
     ]);
-    expect(vi.mocked(blockedGlobalBinDir).mock.lastCall).toEqual(["npm"]);
+    // The recovery already resolved the bin directory, so the check reads that
+    // answer instead of spending a second `npm prefix -g` on the same question —
+    // which is also what preflights the `<prefix>/bin` fallback it falls back to
+    // when npm could not be asked at all.
+    expect(vi.mocked(provenUnwritableDir).mock.lastCall).toEqual([binDir]);
+    expect(blockedGlobalBinDir).not.toHaveBeenCalled();
     const message = plain(vi.mocked(log.error).mock.calls[0][0] as string);
     expect(message).toContain(`it cannot write to ${binDir}`);
     // A directory the user already chose: pointing npm at another one is what
     // just ran, so taking ownership is the way out this path can still offer.
-    expect(message).toContain(`sudo chown -R $(whoami) ${binDir}`);
+    expect(message).toContain(`sudo chown -R $(whoami) '${binDir}'`);
     expect(message).toContain("npx @swmansion/argent init --local");
     // Refused before advertised: telling the user to put a directory on their
     // PATH and then refusing it in the next line reads as two verdicts.
@@ -402,7 +412,8 @@ describe("a global install whose target directory cannot be written", () => {
     const aboveTheMove = os.homedir();
     vi.mocked(select).mockResolvedValue("prefix" as never);
     vi.mocked(probeGlobalInstallTarget).mockReturnValue(writableAfterMove);
-    vi.mocked(blockedGlobalBinDir).mockReturnValue(aboveTheMove);
+    vi.mocked(npmGlobalBinDir).mockReturnValue(path.join(aboveTheMove, ".npm-global", "bin"));
+    vi.mocked(provenUnwritableDir).mockReturnValue(aboveTheMove);
 
     await expect(globalInstall(makeTel())).rejects.toThrow(ExitCalled);
 
@@ -458,7 +469,7 @@ describe("a global install whose target directory cannot be written", () => {
     // npm already points at the prefix this directory is under, so prescribing
     // the move would be a no-op ahead of the remedy that works.
     expect(failure).not.toContain("npm config set prefix");
-    expect(failure).toContain(`sudo chown -R $(whoami) ${binDir}`);
+    expect(failure).toContain(`sudo chown -R $(whoami) '${binDir}'`);
   });
 
   it("reports a bin directory the shells cannot see, with no recovery involved", async () => {
@@ -483,7 +494,59 @@ describe("a global install whose target directory cannot be written", () => {
     // own shells only learn about the directory if they are told.
     const warning = plain(vi.mocked(log.warn).mock.calls.at(-1)?.[0] as string);
     expect(warning).toContain(`Add ${binDir} to your PATH`);
-    expect(warning).toContain(`export PATH="${binDir}:$PATH"`);
+    expect(warning).toContain(`export PATH='${binDir}':"$PATH"`);
+  });
+
+  // PATH resolves an empty field as the current directory, so appending to an
+  // unset one would leave `<binDir>:` and send every command the rest of init
+  // spawns — the `npm install -g` below it included — looking in the project
+  // being initialised first.
+  it("leaves no empty field behind when PATH was unset", async () => {
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    const saved = process.env.PATH;
+    delete process.env.PATH;
+    try {
+      await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+
+      expect(process.env.PATH).toBe(binDir);
+    } finally {
+      process.env.PATH = saved;
+    }
+  });
+
+  // A PATH already carrying the directory, spelled differently: telling the user
+  // to add it names something they have already done, and the duplicate entry
+  // says the membership test never saw it.
+  it("recognizes a directory already on PATH with a trailing separator", async () => {
+    vi.mocked(npmGlobalBinDir).mockReturnValue(binDir);
+    const saved = process.env.PATH;
+    process.env.PATH = `${binDir}${path.sep}${path.delimiter}/usr/bin`;
+    try {
+      const outcome = await runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: writableAfterMove,
+        globalBlockAcknowledged: false,
+        tel: makeTel(),
+      });
+
+      expect(outcome.pathHint).toBeNull();
+      expect(process.env.PATH).toBe(`${binDir}${path.sep}${path.delimiter}/usr/bin`);
+      const warnings = vi.mocked(log.warn).mock.calls.map(([m]) => plain(m as string));
+      expect(warnings.some((w) => w.includes("to your PATH"))).toBe(false);
+    } finally {
+      process.env.PATH = saved;
+    }
   });
 
   it("says nothing about PATH for an install the shells can already find", async () => {
@@ -597,6 +660,7 @@ describe("a global install whose target directory cannot be written", () => {
     // the one call on this path is the re-probe after the move.
     vi.mocked(probeGlobalInstallTarget).mockReturnValue({
       dir: "/home/dev/.npm-global/lib/node_modules",
+      root: "/home/dev/.npm-global/lib/node_modules",
       blocked: true,
       nixStore: false,
     });
@@ -741,6 +805,37 @@ describe("a global install whose target directory cannot be written", () => {
     expect(commands[1]).toEqual(
       expect.objectContaining({ bin: "npm", args: expect.arrayContaining(["-g"]) })
     );
+  });
+
+  // The move offered here would be the one npm already made: it rewrites npm's
+  // user config, reports "npm prefix set to ~/.npm-global", and then fails on
+  // the same directory. The printed remedies suppress this advice on the
+  // identical condition, so the two paths have to agree.
+  it("does not move a prefix npm is already pointed at", async () => {
+    const alreadySuggested = {
+      dir: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+      root: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+      blocked: true,
+      nixStore: false,
+    };
+
+    await expect(
+      runInstall({
+        installMode: "global",
+        fromTar: null,
+        nonInteractive: false,
+        version: "0.0.0",
+        globalTarget: alreadySuggested,
+        globalBlockAcknowledged: true,
+        tel: makeTel(),
+      })
+    ).rejects.toThrow(ExitCalled);
+
+    expect(runShellCommand).not.toHaveBeenCalled();
+    expect(decisions()).toEqual(["unrecoverable"]);
+    const failure = plain(vi.mocked(log.error).mock.calls[0][0] as string);
+    expect(failure).not.toContain("npm config set prefix");
+    expect(failure).toContain(`sudo chown -R $(whoami) '${alreadySuggested.dir}'`);
   });
 
   // "Globally" is still offered for a manager argent cannot relocate — picking

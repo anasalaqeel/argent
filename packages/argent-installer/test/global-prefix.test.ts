@@ -10,6 +10,11 @@ const { mockExecFileSync, mockAccessSync } = vi.hoisted(() => ({
 
 vi.mock("node:child_process", () => ({ execFileSync: mockExecFileSync }));
 
+// The real one, past the mock above: a printed shell command is only proven by a
+// shell parsing it.
+const { execFileSync: realExecFileSync } =
+  await vi.importActual<typeof import("node:child_process")>("node:child_process");
+
 // Real fs everywhere except accessSync, whose errno is the whole verdict and
 // whose interesting values (a read-only mount) no chmod can produce.
 vi.mock("node:fs", async (importOriginal) => {
@@ -76,6 +81,7 @@ describe("probeGlobalInstallTarget", () => {
 
     expect(probeGlobalInstallTarget("npm")).toEqual({
       dir: tmpRoot,
+      root: tmpRoot,
       blocked: false,
       nixStore: false,
     });
@@ -130,6 +136,8 @@ describe("probeGlobalInstallTarget", () => {
       try {
         expect(probeGlobalInstallTarget("npm")).toEqual({
           dir: scopeDir,
+          // What npm named, which is one level above the directory that blocks.
+          root: globalDir,
           blocked: true,
           nixStore: false,
         });
@@ -149,6 +157,43 @@ describe("probeGlobalInstallTarget", () => {
     fs.mkdirSync(packageDir, { recursive: true });
 
     expect(probeGlobalInstallTarget("npm", packageDir)?.dir).toBe(path.dirname(packageDir));
+  });
+
+  // The fallback exists for one npm-specific failure: npm masks UUID-shaped
+  // segments as `***`, leaving both its queries unusable. Every other manager's
+  // query fails because its global directory was never set up, and answering
+  // that with the directory npm installed into names one it never writes to.
+  it("does not answer for a manager whose own query failed", () => {
+    mockExecFileSync.mockImplementation(() => {
+      throw new Error("No package.json was found for the global directory");
+    });
+    const packageDir = path.join(tmpRoot, "lib", "node_modules", "@swmansion", "argent");
+    fs.mkdirSync(packageDir, { recursive: true });
+
+    expect(probeGlobalInstallTarget("bun", packageDir)).toBeNull();
+    expect(probeGlobalInstallTarget("pnpm", packageDir)).toBeNull();
+    expect(probeGlobalInstallTarget("yarn", packageDir)).toBeNull();
+    expect(probeGlobalInstallTarget("npm", packageDir)).not.toBeNull();
+  });
+
+  // Every other nixStore assertion in this file is a hand-written literal, so
+  // without this one the whole flag could be hardcoded false and nothing here
+  // would notice — losing the store cause, the note that rules out sudo, and the
+  // suppression of a chown the next rebuild undoes.
+  it("reports a global directory inside the store as one", () => {
+    const store = path.join(tmpRoot, "store");
+    const globalDir = path.join(store, "aaaa-nodejs", "lib", "node_modules");
+    fs.mkdirSync(globalDir, { recursive: true });
+    mockExecFileSync.mockReturnValue(`${globalDir}\n`);
+    const previous = process.env.NIX_STORE_DIR;
+    process.env.NIX_STORE_DIR = store;
+
+    try {
+      expect(probeGlobalInstallTarget("npm")).toMatchObject({ dir: globalDir, nixStore: true });
+    } finally {
+      if (previous === undefined) delete process.env.NIX_STORE_DIR;
+      else process.env.NIX_STORE_DIR = previous;
+    }
   });
 
   it("returns null when neither the query nor a fallback yields a directory", () => {
@@ -203,10 +248,14 @@ describe("probeGlobalInstallTarget", () => {
     const [, , options] = mockExecFileSync.mock.calls[0] as [
       string,
       string[],
-      { timeout: number; stdio: string[] },
+      { timeout: number; stdio: string[]; killSignal: string },
     ];
     expect(options.timeout).toBeGreaterThan(0);
     expect(options.stdio).toEqual(["ignore", "pipe", "ignore"]);
+    // Without it the timeout is not one: execFileSync sends killSignal and then
+    // blocks until the child exits, so a manager that traps the default SIGTERM
+    // holds the run open for as long as it likes.
+    expect(options.killSignal).toBe("SIGKILL");
   });
 
   it("ignores a relative path from the manager rather than resolving it against cwd", () => {
@@ -217,23 +266,38 @@ describe("probeGlobalInstallTarget", () => {
 });
 
 describe("canRecoverBlockedGlobal", () => {
+  const elsewhere = "/usr/local/lib/node_modules";
+  const alreadySuggested = path.join(os.homedir(), ".npm-global", "lib", "node_modules");
+
   it("has something to carry out for npm, whether or not a project can hold it", () => {
-    expect(canRecoverBlockedGlobal("npm", true)).toBe(true);
-    expect(canRecoverBlockedGlobal("npm", false)).toBe(true);
+    expect(canRecoverBlockedGlobal("npm", true, elsewhere)).toBe(true);
+    expect(canRecoverBlockedGlobal("npm", false, elsewhere)).toBe(true);
   });
 
   it("falls back to the project install for a manager argent cannot relocate", () => {
-    expect(canRecoverBlockedGlobal("pnpm", true)).toBe(true);
-    expect(canRecoverBlockedGlobal("yarn", true)).toBe(true);
-    expect(canRecoverBlockedGlobal("bun", true)).toBe(true);
+    expect(canRecoverBlockedGlobal("pnpm", true, elsewhere)).toBe(true);
+    expect(canRecoverBlockedGlobal("yarn", true, elsewhere)).toBe(true);
+    expect(canRecoverBlockedGlobal("bun", true, elsewhere)).toBe(true);
   });
 
   // Nothing to move and nothing to install into: a prompt here would offer one
   // option that fails and "Cancel".
   it("has nothing to offer without npm's prefix or a package.json", () => {
-    expect(canRecoverBlockedGlobal("pnpm", false)).toBe(false);
-    expect(canRecoverBlockedGlobal("yarn", false)).toBe(false);
-    expect(canRecoverBlockedGlobal("bun", false)).toBe(false);
+    expect(canRecoverBlockedGlobal("pnpm", false, elsewhere)).toBe(false);
+    expect(canRecoverBlockedGlobal("yarn", false, elsewhere)).toBe(false);
+    expect(canRecoverBlockedGlobal("bun", false, elsewhere)).toBe(false);
+  });
+
+  // The move that would be offered is the one npm already made.
+  it("has nothing to offer where npm is already pointed at the suggested prefix", () => {
+    expect(canRecoverBlockedGlobal("npm", false, alreadySuggested)).toBe(false);
+    expect(canRecoverBlockedGlobal("npm", true, alreadySuggested)).toBe(true);
+  });
+
+  it("still offers the move for a prefix that merely starts like the suggested one", () => {
+    expect(
+      canRecoverBlockedGlobal("npm", false, `${path.join(os.homedir(), ".npm-global")}-old/lib`)
+    ).toBe(true);
   });
 });
 
@@ -261,10 +325,16 @@ describe("isNixStorePath", () => {
 describe("unwritableGlobalTargetMessage", () => {
   const nixTarget = {
     dir: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
+    root: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
     blocked: true,
     nixStore: true,
   };
-  const plainTarget = { dir: "/usr/local/lib/node_modules", blocked: true, nixStore: false };
+  const plainTarget = {
+    dir: "/usr/local/lib/node_modules",
+    root: "/usr/local/lib/node_modules",
+    blocked: true,
+    nixStore: false,
+  };
   // The reader already has argent on PATH (update, or a reinstall over an
   // existing global install) and a package.json to install into.
   const installed = { localViable: true, argentOnPath: true };
@@ -303,34 +373,66 @@ describe("unwritableGlobalTargetMessage", () => {
     // prefix the user already chose and `sudo npm i -g` left root-owned.
     const message = plain(unwritableGlobalTargetMessage(plainTarget, "npm", "install", installed));
 
-    expect(message).toContain(`sudo chown -R $(whoami) ${plainTarget.dir}`);
+    expect(message).toContain(`sudo chown -R $(whoami) '${plainTarget.dir}'`);
   });
 
-  it("quotes a blocked directory whose path has spaces", () => {
-    const spaced = {
-      dir: "/Users/dev/Application Support/lib/node_modules/@swmansion",
-      blocked: true,
-      nixStore: false,
-    };
+  // The reader pastes this line, and the directory came from the probe rather
+  // than from them, so every character their shell would otherwise act on has to
+  // survive it — while `$(whoami)` stays live, which is the point of quoting the
+  // argument rather than the command.
+  it.each([
+    ["spaces", "/Users/dev/Application Support/lib/node_modules/@swmansion"],
+    ["an apostrophe", "/Users/o'brien/.npm-global/lib/node_modules/@swmansion"],
+    ["a dollar sign", "/Users/dev/d$TMPDIR-npm/lib/node_modules/@swmansion"],
+    ["a backtick", "/Users/dev/a`id`/lib/node_modules/@swmansion"],
+    ["a backslash", "/Users/dev/back\\slash/lib/node_modules/@swmansion"],
+  ])("quotes a blocked directory whose path has %s", (_label, dir) => {
+    const target = { dir, root: dir, blocked: true, nixStore: false };
+    const message = plain(unwritableGlobalTargetMessage(target, "npm", "install", installed));
+    const chown = message.split("\n").find((line) => line.includes("chown"))!;
 
-    // Unquoted, chown would be handed three path fragments and change nothing.
-    expect(plain(unwritableGlobalTargetMessage(spaced, "npm", "install", installed))).toContain(
-      `sudo chown -R $(whoami) "${spaced.dir}"`
-    );
+    expect(chown).toContain("$(whoami)");
+    // Round-tripped through a real shell: what the reader pastes has to resolve
+    // to the directory they were shown, not to a fragment of it or to whatever
+    // an expansion produced.
+    const echoed = chown.trim().replace("sudo chown -R $(whoami)", "printf %s");
+    expect(realExecFileSync("/bin/sh", ["-c", echoed], { encoding: "utf8" })).toBe(dir);
   });
 
   it("never offers to chown its way out of a shared directory above the tree", () => {
     // The probe reports the nearest EXISTING ancestor, so a prefix whose
     // lib/node_modules has not been created yet lands on the prefix itself.
-    const aboveTree = { dir: "/usr/local", blocked: true, nixStore: false };
+    const aboveTree = {
+      dir: "/usr/local",
+      root: "/usr/local/lib/node_modules",
+      blocked: true,
+      nixStore: false,
+    };
 
     expect(
       plain(unwritableGlobalTargetMessage(aboveTree, "npm", "install", installed))
     ).not.toContain("chown");
   });
 
+  // `yarn global dir` names `~/.config/yarn/global`, which yarn does not create
+  // until something is installed — so the probe walks up to `~/.config`, a
+  // directory under the home directory and therefore one the breadth rule alone
+  // would happily hand to `chown -R`.
+  it("never offers to chown an ancestor the manager did not name", () => {
+    const aboveYarnsOwn = {
+      dir: path.join(os.homedir(), ".config"),
+      root: path.join(os.homedir(), ".config", "yarn", "global"),
+      blocked: true,
+      nixStore: false,
+    };
+
+    expect(
+      plain(unwritableGlobalTargetMessage(aboveYarnsOwn, "yarn", "install", installed))
+    ).not.toContain("chown");
+  });
+
   it("never offers to chown the whole home directory", () => {
-    const home = { dir: os.homedir(), blocked: true, nixStore: false };
+    const home = { dir: os.homedir(), root: os.homedir(), blocked: true, nixStore: false };
 
     expect(plain(unwritableGlobalTargetMessage(home, "yarn", "install", installed))).not.toContain(
       "chown"
@@ -342,13 +444,14 @@ describe("unwritableGlobalTargetMessage", () => {
     // `sudo yarn global add` leaves root-owned.
     const yarnGlobal = {
       dir: path.join(os.homedir(), ".config", "yarn", "global"),
+      root: path.join(os.homedir(), ".config", "yarn", "global"),
       blocked: true,
       nixStore: false,
     };
 
     expect(
       plain(unwritableGlobalTargetMessage(yarnGlobal, "yarn", "install", installed))
-    ).toContain(`sudo chown -R $(whoami) ${yarnGlobal.dir}`);
+    ).toContain(`sudo chown -R $(whoami) '${yarnGlobal.dir}'`);
   });
 
   it("never offers to chown a store path", () => {
@@ -625,10 +728,10 @@ describe("unwritableGlobalBinMessage", () => {
 
 const ctxWithProject = { localViable: true, argentOnPath: false };
 
-describe("unwritableGlobalBinMessage — nothing left to advise", () => {
-  it("prints the cause alone rather than a cause and a blank line", () => {
-    // Every remedy drops out together: the prefix move is the step that just
-    // ran, the store rules out chown, and there is no package.json.
+describe("unwritableGlobalBinMessage — nothing specific left to advise", () => {
+  it("falls back to a prefix the reader picks rather than stopping at the cause", () => {
+    // Every specific remedy drops out together: the prefix move is the step that
+    // just ran, the store rules out chown, and there is no package.json.
     const stored = "/nix/store/aaaa-nodejs/lib/node_modules";
     const message = plain(
       unwritableGlobalBinMessage(
@@ -640,6 +743,8 @@ describe("unwritableGlobalBinMessage — nothing left to advise", () => {
     );
 
     expect(message).toContain("it cannot write to");
+    expect(message).toContain("a directory you own, outside the store");
+    expect(message).not.toContain("chown");
     expect(message.trimEnd()).toBe(message);
   });
 
@@ -677,12 +782,17 @@ describe("unwritableGlobalBinMessage — nothing left to advise", () => {
   });
 });
 
-describe("unwritableGlobalTargetMessage — nothing left to advise", () => {
-  it("prints the cause alone rather than a cause and a blank line", () => {
+describe("unwritableGlobalTargetMessage — nothing specific left to advise", () => {
+  // npm already pointed at the suggested prefix (so naming it is no advice) and
+  // that prefix inside the store (so chown is none either), with no package.json
+  // to install into. Every remedy that names a directory drops out, and what is
+  // left has to still be an action.
+  it("falls back to a prefix the reader picks rather than stopping at the cause", () => {
     const message = plain(
       unwritableGlobalTargetMessage(
         {
           dir: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+          root: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
           blocked: true,
           nixStore: true,
         },
@@ -693,6 +803,9 @@ describe("unwritableGlobalTargetMessage — nothing left to advise", () => {
     );
 
     expect(message).toContain("read-only Nix store");
+    expect(message).toContain("npm config set prefix");
+    expect(message).toContain("a directory you own, outside the store");
+    expect(message).not.toContain("chown");
     expect(message.trimEnd()).toBe(message);
   });
 });
@@ -731,6 +844,56 @@ describe("blockedGlobalInstallMessage", () => {
     // is the first thing to say.
     expect(message).toContain("npm config set prefix");
     fs.chmodSync(bin, 0o755);
+  });
+
+  // `npm install -g` needs both, so a run blocked on both is told both — acting
+  // on the first one otherwise only earns a second failed install on the second.
+  it("reports both directories when both are blocked", () => {
+    if (!canTestUnwritable) return;
+    const root = path.join(tmpRoot, "lib", "node_modules");
+    const bin = path.join(tmpRoot, "bin");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(bin, { recursive: true });
+    fs.chmodSync(root, 0o555);
+    fs.chmodSync(bin, 0o555);
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${root}\n` : `${tmpRoot}\n`) as never);
+
+    const message = plain(blockedGlobalInstallMessage("npm", null, "install", ctx) ?? "");
+
+    expect(message).toContain("global package directory is not writable");
+    expect(message).toContain(root);
+    expect(message).toContain(`command into either:\n  ${bin}`);
+    expect(message).toContain(`sudo chown -R $(whoami) '${root}'`);
+    fs.chmodSync(root, 0o755);
+    fs.chmodSync(bin, 0o755);
+  });
+
+  // Both are separate permissions, so both get a way out where one applies —
+  // withheld for a `/usr/local/bin` shared with every other command, offered for
+  // a prefix the user made themselves.
+  it("offers ownership of a blocked bin directory inside the user's own prefix", () => {
+    if (!canTestUnwritable) return;
+    const prefix = fs.mkdtempSync(path.join(os.homedir(), ".argent-prefix-"));
+    const root = path.join(prefix, "lib", "node_modules");
+    const bin = path.join(prefix, "bin");
+    fs.mkdirSync(root, { recursive: true });
+    fs.mkdirSync(bin, { recursive: true });
+    fs.chmodSync(root, 0o555);
+    fs.chmodSync(bin, 0o555);
+    mockExecFileSync.mockImplementation(((_bin: string, args: string[]) =>
+      args[0] === "root" ? `${root}\n` : `${prefix}\n`) as never);
+
+    try {
+      const message = plain(blockedGlobalInstallMessage("npm", null, "install", ctx) ?? "");
+
+      expect(message).toContain(`sudo chown -R $(whoami) '${root}'`);
+      expect(message).toContain(`sudo chown -R $(whoami) '${bin}'`);
+    } finally {
+      fs.chmodSync(root, 0o755);
+      fs.chmodSync(bin, 0o755);
+      fs.rmSync(prefix, { recursive: true, force: true });
+    }
   });
 
   it("answers null when neither directory is blocked", () => {

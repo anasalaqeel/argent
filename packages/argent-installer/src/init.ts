@@ -129,7 +129,11 @@ export async function init(args: string[]): Promise<void> {
     const skipBlockedModePrompt =
       blockedGlobal !== null &&
       (process.stdin.isTTY !== true ||
-        !canRecoverBlockedGlobal(blockedGlobal.pm, hasProjectPackageJson(initProjectRoot)));
+        !canRecoverBlockedGlobal(
+          blockedGlobal.pm,
+          hasProjectPackageJson(initProjectRoot),
+          blockedGlobal.target.dir
+        ));
     tel.installMode =
       modeFromFlags ??
       (skipBlockedModePrompt

@@ -14,6 +14,7 @@ import {
   localInstallCommand,
   projectInstallCommand,
   formatShellCommand,
+  shellQuotePath,
   resolveProjectRoot,
   hasProjectPackageJson,
   isGloballyInstalled,
@@ -26,6 +27,7 @@ import type { PackageManager } from "./package-manager.js";
 import { runShellCommand, runTrustingDisk, ShellCommandError } from "./shell.js";
 import {
   blockedGlobalTargetCause,
+  canMoveNpmPrefix,
   canRecoverBlockedGlobal,
   forgetInheritedNpmPrefix,
   isNixStorePath,
@@ -34,6 +36,7 @@ import {
   blockedGlobalBinDir,
   blockedGlobalInstallMessage,
   npmGlobalBinDir,
+  provenUnwritableDir,
   unwritableGlobalBinMessage,
   npmUserConfigPath,
   probeGlobalInstallTarget,
@@ -296,10 +299,13 @@ async function recoverBlockedGlobalInstall(opts: {
 
   const failWith = (message: string): Promise<never> => failGlobalInstall(message, startedAt, tel);
   const failWithAdvice = (blocked: GlobalInstallTarget): Promise<never> =>
-    failWith(unwritableGlobalTargetMessage(blocked, pm, "install", remedies));
+    failWith(
+      unwritableGlobalTargetMessage(blocked, pm, "install", remedies, blockedGlobalBinDir(pm))
+    );
 
-  // npm is the only manager whose global directory argent can relocate.
-  const canMovePrefix = pm === "npm";
+  // npm is the only manager whose global directory argent can relocate — and not
+  // where npm is already pointed at the directory the move would set.
+  const canMovePrefix = canMoveNpmPrefix(pm, target.dir);
   // A local install needs a package.json to add the devDependency to.
   const canInstallLocally = remedies.localViable;
   // A prompt with no terminal behind it never settles: the run would end at a
@@ -310,7 +316,8 @@ async function recoverBlockedGlobalInstall(opts: {
   // instead of opening a prompt whose only option is to give up. init skips its
   // own mode step on the same two conditions, so an acknowledged choice never
   // reaches here.
-  if (!canAsk || !canRecoverBlockedGlobal(pm, canInstallLocally)) return failWithAdvice(target);
+  if (!canAsk || !canRecoverBlockedGlobal(pm, canInstallLocally, target.dir))
+    return failWithAdvice(target);
 
   if (acknowledged) {
     // Chosen knowing the block, but for a manager whose directory argent
@@ -390,7 +397,7 @@ async function recoverBlockedGlobalInstall(opts: {
   if (moved?.blocked) {
     await failWith(
       withRemedies(blockedGlobalTargetCause(moved, pm, "install"), [
-        ownableRemedy(moved.dir),
+        ownableRemedy(moved.dir, moved.root),
         localInstallRemedy(remedies),
       ])
     );
@@ -411,8 +418,8 @@ function withRemedies(cause: string, remedies: (string | null)[]): string {
 }
 
 /** Ownership, unless Nix would undo the chown at the next rebuild. */
-function ownableRemedy(dir: string): string | null {
-  return isNixStorePath(dir) ? null : ownershipRemedy(dir);
+function ownableRemedy(dir: string, root: string): string | null {
+  return isNixStorePath(dir) ? null : ownershipRemedy(dir, root);
 }
 
 async function failGlobalInstall(
@@ -433,11 +440,17 @@ async function failGlobalInstall(
 async function confirmGlobalBinWritable(ctx: {
   pm: PackageManager;
   remedies: RemedyContext;
+  /** Bin directory the recovery already resolved, so npm is not asked twice. */
+  binDir: string | null;
   prefixJustMoved: boolean;
   startedAt: number;
   tel: InitTelemetry;
 }): Promise<void> {
-  const blocked = blockedGlobalBinDir(ctx.pm);
+  // The recovery's own fallback (`<prefix>/bin`, where npm could not be asked)
+  // has to be checked as well: it is the directory adoptGlobalBinDir puts on
+  // PATH, and asking npm again would only reproduce the answer it already gave.
+  const blocked =
+    ctx.binDir === null ? blockedGlobalBinDir(ctx.pm) : provenUnwritableDir(ctx.binDir);
   if (blocked === null) return;
   await failGlobalInstall(
     unwritableGlobalBinMessage(blocked, "install", ctx.remedies, ctx.prefixJustMoved),
@@ -455,15 +468,24 @@ async function confirmGlobalBinWritable(ctx: {
  * and there is nothing to say.
  */
 function adoptGlobalBinDir(binDir: string): string | null {
-  if ((process.env.PATH ?? "").split(path.delimiter).includes(binDir)) return null;
-  process.env.PATH = `${binDir}${path.delimiter}${process.env.PATH ?? ""}`;
+  // Empty fields dropped, not carried: PATH resolves one as the current
+  // directory, so appending to an unset PATH would leave `<binDir>:` and send
+  // every command argent spawns afterwards looking in the project first. The
+  // same filter is what makes path.resolve safe to compare with — it resolves
+  // "" to the cwd, which would match a binDir that happens to be it.
+  const entries = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  // Resolved, not spelled: a PATH carrying the same directory with a trailing
+  // slash is already pointing at it, and telling the user to add it again names
+  // something they have done.
+  if (entries.some((entry) => path.resolve(entry) === path.resolve(binDir))) return null;
+  process.env.PATH = [binDir, ...entries].join(path.delimiter);
   // No command spelled out on Windows: there is no one shell to write it for,
   // and `setx` truncates a PATH longer than 1024 characters.
   p.log.warn(
     process.platform === "win32"
       ? `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}.`
       : `Add ${pc.cyan(binDir)} to your PATH so new shells find ${PACKAGE_NAME}:\n` +
-          `    ${pc.cyan(`export PATH="${binDir}:$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
+          `    ${pc.cyan(`export PATH=${shellQuotePath(binDir)}:"$PATH"`)}  ${pc.dim("(add to your shell profile)")}`
   );
   return binDir;
 }
@@ -519,6 +541,7 @@ async function runGlobal(opts: {
     await confirmGlobalBinWritable({
       pm,
       remedies,
+      binDir: recoveredBinDir,
       prefixJustMoved: recoveredBinDir !== null,
       startedAt: preflightStartedAt,
       tel,

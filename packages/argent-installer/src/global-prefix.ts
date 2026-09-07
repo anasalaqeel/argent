@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import pc from "picocolors";
 import { PACKAGE_NAME, MCP_BINARY_NAME } from "./constants.js";
-import { formatShellCommand, type PackageManager } from "./package-manager.js";
+import { shellQuotePath, type PackageManager } from "./package-manager.js";
 
 // Where a package manager puts global installs, and whether this user can write
 // there. Nix-managed toolchains are the motivating case: npm derives its global
@@ -46,6 +46,12 @@ function queryAbsolutePath(bin: string, args: readonly string[]): string | null 
     stdout = execFileSync(bin, [...args], {
       encoding: "utf8",
       timeout: QUERY_TIMEOUT_MS,
+      // SIGKILL, or the timeout is not one: execFileSync sends killSignal and
+      // then keeps blocking until the child exits, so a manager that traps TERM
+      // — or sits in uninterruptible sleep on a hung network mount, which is
+      // what makes `npm root -g` stall in the first place — holds the run open
+      // with no ceiling at all.
+      killSignal: "SIGKILL",
       stdio: ["ignore", "pipe", "ignore"],
       // Node refuses to spawn the .cmd shim a Windows package manager installs
       // as unless it goes through a shell — the same reason shell.ts does this.
@@ -137,6 +143,14 @@ function nearestExistingDir(dir: string): string | null {
 export interface GlobalInstallTarget {
   /** Existing directory the global install has to write into. */
   dir: string;
+  /**
+   * Global directory the manager named. `dir` is this or below it, except where
+   * the manager named one that does not exist yet — then `dir` is an ancestor
+   * that merely has to exist, which is a different thing from a directory the
+   * manager owns. {@link ownershipRemedy} is the caller that has to tell the two
+   * apart.
+   */
+  root: string;
   /** Proven unwritable — see {@link probeGlobalInstallTarget} on why not "not writable". */
   blocked: boolean;
   /** `dir` is inside the immutable Nix store. */
@@ -151,8 +165,14 @@ const BLOCKING_ERRNOS = new Set(["EACCES", "EPERM", "EROFS"]);
 
 /**
  * Probe where a global install by `pm` would land and whether it can be written.
+ *
  * `installedPackageRoot` (the currently-installed package's own directory) is a
- * fallback for when the manager's own query is unavailable.
+ * fallback for npm alone. npm masks UUID-shaped path segments as `***` in
+ * everything it prints, so a prefix under `/tmp/<uuid>/…` leaves both its
+ * queries unusable and the installed copy is the only remaining signal. Every
+ * other manager's query fails for the opposite reason — its global directory has
+ * never been set up — and answering that with the directory some OTHER manager
+ * installed into names one it would never write to.
  *
  * Everything inconclusive returns null, and `blocked` is false unless a
  * permission error proved otherwise: a wrong "blocked" refuses an install that
@@ -168,17 +188,22 @@ export function probeGlobalInstallTarget(
   if (process.platform === "win32") return null;
 
   const queried = queryGlobalInstallDir(pm);
+  const fallback = pm === "npm" ? installedPackageRoot : null;
   // What the install writes into is the package's own PARENT: npm stages the
   // new copy beside the old one and renames, so a prefix whose `@swmansion`
   // came from an earlier `sudo npm install -g` fails with EACCES on the rename
   // while `node_modules` above it stays writable.
-  const packagePath = queried ? path.join(queried, PACKAGE_NAME) : installedPackageRoot;
+  const packagePath = queried ? path.join(queried, PACKAGE_NAME) : fallback;
   if (packagePath === null) return null;
+  // Two segments up from the package is what `<root>/@swmansion/argent` makes of
+  // a scoped name — the same directory `queried` names directly.
+  const root = queried ?? path.dirname(path.dirname(packagePath));
   const dir = nearestExistingDir(path.dirname(packagePath));
   if (dir === null) return null;
 
   const describe = (blocked: boolean): GlobalInstallTarget => ({
     dir,
+    root,
     blocked,
     nixStore: isNixStorePath(dir),
   });
@@ -194,6 +219,19 @@ export function probeGlobalInstallTarget(
 /** Writable prefix the remedies point npm at, and that init can set for the user. */
 export function suggestedNpmPrefix(): string {
   return path.join(os.homedir(), ".npm-global");
+}
+
+/**
+ * Whether pointing npm at {@link suggestedNpmPrefix} would move anything. npm is
+ * the only manager whose knob argent knows, and a prefix already there is not
+ * moved by setting it again — offering that as the way out walks the user
+ * through a step this already knows cannot help.
+ */
+export function canMoveNpmPrefix(pm: PackageManager, blockedDir: string): boolean {
+  if (pm !== "npm") return false;
+  const suggested = suggestedNpmPrefix();
+  // `~/.npm-global-old` is a different prefix, so the separator is load-bearing.
+  return blockedDir !== suggested && !blockedDir.startsWith(suggested + path.sep);
 }
 
 /**
@@ -222,7 +260,8 @@ export function forgetInheritedNpmPrefix(): void {
 export function blockedGlobalTargetCause(
   target: GlobalInstallTarget,
   pm: PackageManager,
-  verb: "install" | "update"
+  verb: "install" | "update",
+  alsoBlockedBinDir: string | null = null
 ): string {
   const cause = target.nixStore
     ? "its global package directory is inside the read-only Nix store"
@@ -230,10 +269,19 @@ export function blockedGlobalTargetCause(
   // Only the store's own note belongs here: this text also prefaces the prompt
   // that offers the ways out, before anything has been attempted.
   const note = target.nixStore ? nixStoreNote() : null;
+  // `npm install -g` needs both directories, so a run blocked on both is told
+  // both — otherwise following the remedy for the first one only earns a second
+  // failed install on the second.
+  const alsoBin =
+    alsoBlockedBinDir === null
+      ? ""
+      : `\nIt cannot write to the directory it links the ${MCP_BINARY_NAME} command into either:\n` +
+        `  ${pc.dim(alsoBlockedBinDir)}`;
 
   return (
     `${pc.cyan(pm)} cannot ${verb} ${PACKAGE_NAME} globally: ${cause}.\n` +
     `  ${pc.dim(target.dir)}` +
+    alsoBin +
     (note === null ? "" : `\n${note}`)
   );
 }
@@ -289,13 +337,18 @@ export interface RemedyContext {
 
 /**
  * Whether a blocked global install leaves argent anything to carry out: moving
- * npm's prefix (the only manager whose knob argent knows — the equivalent
- * differs for every other one, and yarn berry has no global install at all), or
- * installing into the project, which needs a package.json to hold the
- * devDependency. With neither, there is nothing to ask about.
+ * npm's prefix somewhere it is not already (the only manager whose knob argent
+ * knows — the equivalent differs for every other one, and yarn berry has no
+ * global install at all), or installing into the project, which needs a
+ * package.json to hold the devDependency. With neither, there is nothing to ask
+ * about.
  */
-export function canRecoverBlockedGlobal(pm: PackageManager, localViable: boolean): boolean {
-  return pm === "npm" || localViable;
+export function canRecoverBlockedGlobal(
+  pm: PackageManager,
+  localViable: boolean,
+  blockedDir: string
+): boolean {
+  return canMoveNpmPrefix(pm, blockedDir) || localViable;
 }
 
 /**
@@ -318,11 +371,9 @@ export function localInstallRemedy(ctx: RemedyContext): string | null {
 function writablePrefixRemedy(pm: PackageManager, blocked: string): string | null {
   if (pm !== "npm")
     return `  Point ${pc.cyan(pm)} at a global directory you can write to, then retry.`;
-  // Already pointed there: moving it again changes nothing, and printing it
-  // first buries the remedy that does work. On a separator, as isNixStorePath
-  // and ownershipRemedy are: ~/.npm-global-old is a different prefix.
-  const suggested = suggestedNpmPrefix();
-  if (blocked === suggested || blocked.startsWith(suggested + path.sep)) return null;
+  // Already pointed there: naming it again is not advice, and printing it first
+  // buries the remedy that does work.
+  if (!canMoveNpmPrefix(pm, blocked)) return null;
   return (
     `  Point npm at a writable prefix, then retry:\n` +
     `    ${pc.cyan('npm config set prefix "$HOME/.npm-global"')}\n` +
@@ -331,21 +382,46 @@ function writablePrefixRemedy(pm: PackageManager, blocked: string): string | nul
 }
 
 /**
+ * The one remedy left when every specific one dropped out: npm is already
+ * pointed at the suggested prefix, so naming it again is no advice, and that
+ * prefix is immutable, so taking ownership is none either. Pointing npm at some
+ * OTHER directory still is — the reader picks it, since argent has no second
+ * default to offer.
+ */
+function anyWritablePrefixRemedy(): string {
+  return (
+    `  Point npm at a directory you own, outside the store, then retry:\n` +
+    `    ${pc.cyan('npm config set prefix "<a directory you can write to>"')}\n` +
+    `    ${pc.cyan('export PATH="<that directory>/bin:$PATH"')}  ${pc.dim("(add to your shell profile)")}`
+  );
+}
+
+/**
  * Taking ownership of `dir` — the way out where the blocked directory sits under
  * a prefix the user already chose and an earlier `sudo npm i -g` left it
- * root-owned, which the prefix remedy cannot help with. Null for a directory too
- * broad to hand to `chown -R`: a probe reports the nearest EXISTING ancestor of
- * the global package directory, which for a prefix never created is somewhere
- * far above it — /usr/local, or the home directory itself. Inside a node_modules
- * tree covers npm and pnpm; below the home directory covers yarn and bun.
+ * root-owned, which the prefix remedy cannot help with.
+ *
+ * Null for a directory too broad to hand to `chown -R`, on two counts. A probe
+ * reports the nearest EXISTING ancestor, so a global directory the manager has
+ * not created yet reports one above it: `root` is what the manager itself named,
+ * and anything above that is a directory it merely needs to exist rather than
+ * one it owns (`~/.config`, for a `yarn global dir` yarn never made). And a
+ * directory that is neither inside a node_modules tree nor under the home
+ * directory is shared with the rest of the system — `/usr/local/bin` holds every
+ * other command on the machine, not just this one.
+ *
+ * `dir` is quoted and `$(whoami)` is not: the reader pastes this, and the
+ * directory came from the probe rather than from them, so it can hold the
+ * characters their shell would otherwise act on.
  */
-export function ownershipRemedy(dir: string): string | null {
+export function ownershipRemedy(dir: string, root: string): string | null {
+  if (root !== dir && root.startsWith(dir + path.sep)) return null;
   const home = os.homedir();
   const ownable =
     dir.split(path.sep).includes("node_modules") ||
     (dir !== home && dir.startsWith(home + path.sep));
   if (!ownable) return null;
-  const chown = formatShellCommand({ bin: "sudo", args: ["chown", "-R", "$(whoami)", dir] });
+  const chown = `sudo chown -R $(whoami) ${shellQuotePath(dir)}`;
   return `  Take ownership of the directory that is blocking it:\n    ${pc.cyan(chown)}`;
 }
 
@@ -377,7 +453,7 @@ export function unwritableGlobalBinMessage(
 ): string {
   const remedies = [
     prefixJustMoved ? null : writablePrefixRemedy("npm", dir),
-    isNixStorePath(dir) ? null : ownershipRemedy(dir),
+    isNixStorePath(dir) ? null : ownershipRemedy(dir, dir),
     localInstallRemedy(ctx),
   ].filter((remedy): remedy is string => remedy !== null);
   const cause =
@@ -386,7 +462,18 @@ export function unwritableGlobalBinMessage(
     // Same note blockedGlobalTargetCause carries for the package directory: the
     // chown remedy is missing above, and without this nothing says why.
     (isNixStorePath(dir) ? `\n${nixStoreNote()}` : "");
-  return remedies.length === 0 ? cause : `${cause}\n\n${remedies.join("\n\n")}`;
+  return withRemedies(cause, remedies);
+}
+
+/**
+ * The cause, then the remedies — or the one that is left when every specific one
+ * dropped out. A message that says only what is wrong leaves the reader nowhere
+ * to go, and the case that produces it (npm pointed at a `~/.npm-global` that
+ * resolves into the store) has an obvious way out nobody was told about.
+ */
+function withRemedies(cause: string, remedies: string[]): string {
+  const usable = remedies.length === 0 ? [anyWritablePrefixRemedy()] : remedies;
+  return `${cause}\n\n${usable.join("\n\n")}`;
 }
 
 /** The cause plus the ways out, spelled as commands to run. */
@@ -394,24 +481,30 @@ export function unwritableGlobalTargetMessage(
   target: GlobalInstallTarget,
   pm: PackageManager,
   verb: "install" | "update",
-  ctx: RemedyContext
+  ctx: RemedyContext,
+  alsoBlockedBinDir: string | null = null
 ): string {
   const remedies = [
     writablePrefixRemedy(pm, target.dir),
     // Never for a store path: Nix undoes the chown at the next rebuild, which
     // is the whole reason the Nix cause exists.
-    target.nixStore ? null : ownershipRemedy(target.dir),
+    target.nixStore ? null : ownershipRemedy(target.dir, target.root),
+    alsoBlockedBinDir === null || isNixStorePath(alsoBlockedBinDir)
+      ? null
+      : ownershipRemedy(alsoBlockedBinDir, alsoBlockedBinDir),
     localInstallRemedy(ctx),
   ].filter((remedy): remedy is string => remedy !== null);
 
-  const cause = blockedGlobalTargetCause(target, pm, verb);
-  return remedies.length === 0 ? cause : `${cause}\n\n${remedies.join("\n\n")}`;
+  const cause = blockedGlobalTargetCause(target, pm, verb, alsoBlockedBinDir);
+  return withRemedies(cause, remedies);
 }
 
 /**
  * Why a global install cannot proceed — the package directory npm writes under,
- * or the bin directory it links commands into — or null where nothing was
- * proven. `npm install -g` needs both, and they are separate permissions.
+ * the bin directory it links commands into, or both — or null where nothing was
+ * proven. `npm install -g` needs both and they are separate permissions, so a
+ * run blocked on both hears about both rather than discovering the second one
+ * after acting on the first.
  */
 export function blockedGlobalInstallMessage(
   pm: PackageManager,
@@ -420,7 +513,7 @@ export function blockedGlobalInstallMessage(
   ctx: RemedyContext
 ): string | null {
   const target = probeGlobalInstallTarget(pm, installedRoot);
-  if (target?.blocked) return unwritableGlobalTargetMessage(target, pm, verb, ctx);
   const binDir = blockedGlobalBinDir(pm);
+  if (target?.blocked) return unwritableGlobalTargetMessage(target, pm, verb, ctx, binDir);
   return binDir === null ? null : unwritableGlobalBinMessage(binDir, verb, ctx, false);
 }

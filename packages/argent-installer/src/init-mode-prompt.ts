@@ -3,6 +3,7 @@ import { InitCancelled } from "./init-args.js";
 import type { InstallMode } from "./install-record.js";
 import {
   blockedGlobalTargetCause,
+  canMoveNpmPrefix,
   suggestedNpmPrefix,
   type GlobalInstallTarget,
 } from "./global-prefix.js";
@@ -35,8 +36,11 @@ export async function promptInstallMode(
   const localViable = hasProjectPackageJson(resolveProjectRoot(process.cwd()));
   const recommended = blockedGlobal === null ? "global" : localViable ? "local" : null;
 
+  // The promise is only made where the move is one: npm already pointed at the
+  // suggested prefix is not relocated by being pointed there again, and the
+  // recovery behind this option refuses on the same condition.
   const globalHint = blockedGlobal
-    ? blockedGlobal.pm === "npm"
+    ? canMoveNpmPrefix(blockedGlobal.pm, blockedGlobal.target.dir)
       ? `Needs a writable global directory — argent will point npm at ${suggestedNpmPrefix()}`
       : `Needs a writable global directory, and argent cannot relocate ${blockedGlobal.pm}'s global directory`
     : "Installs the argent command on your PATH; shared across every project";

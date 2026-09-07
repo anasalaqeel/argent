@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as os from "node:os";
+import * as path from "node:path";
 import { promptInstallMode } from "../src/init-mode-prompt.js";
 import { hasProjectPackageJson } from "../src/utils.js";
 import { log, select } from "@clack/prompts";
@@ -37,6 +39,7 @@ const option = (value: string): Option => shownOptions().options.find((o) => o.v
 
 const nixStoreTarget: GlobalInstallTarget = {
   dir: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
+  root: "/nix/store/abc-nodejs-22.16.0/lib/node_modules",
   blocked: true,
   nixStore: true,
 };
@@ -114,5 +117,21 @@ describe("promptInstallMode", () => {
 
     expect(option("global").hint).not.toContain(".npm-global");
     expect(option("global").hint).toContain("relocate pnpm's global directory");
+  });
+
+  // The move the hint promises is the one npm already made, so carrying it out
+  // rewrites npm's user config and then fails on the same directory. The printed
+  // remedies suppress this advice on the identical condition.
+  it("does not promise a move where npm is already pointed at the suggested prefix", async () => {
+    const alreadyThere: GlobalInstallTarget = {
+      dir: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+      root: path.join(os.homedir(), ".npm-global", "lib", "node_modules"),
+      blocked: true,
+      nixStore: false,
+    };
+
+    await promptInstallMode("global", { target: alreadyThere, pm: "npm" });
+
+    expect(option("global").hint).not.toContain("will point npm at");
   });
 });

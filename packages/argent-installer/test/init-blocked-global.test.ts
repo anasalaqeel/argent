@@ -83,6 +83,7 @@ vi.mock("../src/utils.js", async (importOriginal) => {
 
 const blocked: GlobalInstallTarget = {
   dir: "/nix/store/aaaa-nodejs/lib/node_modules",
+  root: "/nix/store/aaaa-nodejs/lib/node_modules",
   blocked: true,
   nixStore: true,
 };
@@ -95,10 +96,22 @@ let exitSpy: ReturnType<typeof vi.spyOn>;
 
 class ExitSentinel extends Error {}
 
-/** The mode init told runInstall to install, plus the block it acknowledged. */
-function installArgs(): { installMode: string; globalBlockAcknowledged: boolean } {
+/**
+ * What init told runInstall: the mode, the block it acknowledged, and the probed
+ * target. The target is the one `runGlobal` gates the whole recovery on, so
+ * leaving it unasserted lets the recovery be cut off without a failing test.
+ */
+function installArgs(): {
+  installMode: string;
+  globalBlockAcknowledged: boolean;
+  globalTarget: GlobalInstallTarget | null;
+} {
   const [args] = vi.mocked(runInstall).mock.calls[0] as [
-    { installMode: string; globalBlockAcknowledged: boolean },
+    {
+      installMode: string;
+      globalBlockAcknowledged: boolean;
+      globalTarget: GlobalInstallTarget | null;
+    },
   ];
   return args;
 }
@@ -141,11 +154,23 @@ describe("init — a blocked global install decides the mode step", () => {
   it("asks, and treats picking Globally as the block acknowledged", async () => {
     await init(["--no-telemetry"]);
 
-    expect(promptInstallMode).toHaveBeenCalledWith(
-      "global",
-      expect.objectContaining({ pm: "npm" })
-    );
-    expect(installArgs()).toMatchObject({ installMode: "global", globalBlockAcknowledged: true });
+    expect(promptInstallMode).toHaveBeenCalledWith("global", { target: blocked, pm: "npm" });
+    expect(installArgs()).toMatchObject({
+      installMode: "global",
+      globalBlockAcknowledged: true,
+      globalTarget: blocked,
+    });
+  });
+
+  // The mode step is a question, so its answer decides the install — not init's
+  // own `recordedMode ?? "global"` default, which happens to agree with it on
+  // every other test in this file.
+  it("installs the mode the step answered with, not the one it defaulted to", async () => {
+    vi.mocked(promptInstallMode).mockResolvedValue("local");
+
+    await init(["--no-telemetry"]);
+
+    expect(installArgs()).toMatchObject({ installMode: "local" });
   });
 
   it("does not render a menu with no terminal to answer it on", async () => {
@@ -154,8 +179,13 @@ describe("init — a blocked global install decides the mode step", () => {
     await init(["--no-telemetry"]);
 
     expect(promptInstallMode).not.toHaveBeenCalled();
-    // Nothing was acknowledged, so the install step spells out the remedies.
-    expect(installArgs()).toMatchObject({ installMode: "global", globalBlockAcknowledged: false });
+    // Nothing was acknowledged, so the install step spells out the remedies —
+    // which it can only do with the target it was handed.
+    expect(installArgs()).toMatchObject({
+      installMode: "global",
+      globalBlockAcknowledged: false,
+      globalTarget: blocked,
+    });
   });
 
   it("does not ask when argent could carry out neither way out", async () => {
@@ -259,6 +289,7 @@ describe("init — a global install nothing is blocking", () => {
   beforeEach(() => {
     vi.mocked(probeGlobalInstallTarget).mockReturnValue({
       dir: "/usr/local/lib/node_modules",
+      root: "/usr/local/lib/node_modules",
       blocked: false,
       nixStore: false,
     });
@@ -268,7 +299,10 @@ describe("init — a global install nothing is blocking", () => {
     await init(["--no-telemetry"]);
 
     expect(promptInstallMode).toHaveBeenCalledWith("global", null);
-    expect(installArgs()).toMatchObject({ globalBlockAcknowledged: false });
+    expect(installArgs()).toMatchObject({
+      globalBlockAcknowledged: false,
+      globalTarget: { blocked: false },
+    });
   });
 
   it("does not spend a package-manager query where no fresh install can happen", async () => {
