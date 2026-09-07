@@ -1,5 +1,6 @@
 import * as p from "@clack/prompts";
 import pc from "picocolors";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import semver from "semver";
 import { init as telemetryInit, track, warmTelemetryIdentitySync } from "@argent/telemetry";
@@ -40,7 +41,11 @@ import {
 } from "./utils.js";
 import { parseTargetFlags, decideInstallTargets, promptInstallTargets } from "./install-targets.js";
 import { execShellCommandSync, runTrustingDisk } from "./shell.js";
-import { blockedGlobalInstallMessage } from "./global-prefix.js";
+import {
+  blockedGlobalInstallMessage,
+  globalInstallPresent,
+  npmGlobalPackageRoot,
+} from "./global-prefix.js";
 import { reportSkillRefresh } from "./skills.js";
 import { PACKAGE_NAME } from "./constants.js";
 import { resolveInstallableUpdateTarget } from "./update-target.js";
@@ -76,6 +81,29 @@ function getProjectRootOverride(args: string[]): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Where the global install really sits — npm's own directory ahead of PATH's.
+ * PATH names whichever copy comes first, and names none at all when a prefix
+ * move installed into a bin directory the user's profile does not export yet;
+ * npm's is also the directory `npm install -g` replaces.
+ */
+function globalInstallRoot(): string | null {
+  return npmGlobalPackageRoot() ?? getGloballyInstalledPackageRoot();
+}
+
+/** Version in `root`'s manifest; null when there is none to read. */
+function readManifestVersion(root: string | null): string | null {
+  if (root === null) return null;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8")) as {
+      version?: string;
+    };
+    return pkg.version ?? null;
+  } catch {
+    return null;
+  }
 }
 
 type UpdateTrigger = "update" | "mcp_update";
@@ -217,14 +245,12 @@ export async function update(args: string[]): Promise<void> {
     // cache, always at the latest published version — PACKAGE_ROOT would
     // falsely report "already on the latest". Resolve the *real* install.
     const localProbe = mode === "local" ? probeLocalInstall(projectRoot) : null;
-    const globallyInstalled = mode === "global" && isGloballyInstalled();
+    const argentOnPath = mode === "global" && isGloballyInstalled();
+    const globalRoot = mode === "global" ? globalInstallRoot() : null;
+    // A root that will not resolve (Windows .cmd wrapper) is still an install.
+    const globallyInstalled = argentOnPath || globalRoot !== null;
     const isInstalledForMode = mode === "local" ? localProbe!.installed : globallyInstalled;
-    const installed =
-      mode === "local"
-        ? localProbe!.version
-        : globallyInstalled
-          ? getGloballyInstalledVersion()
-          : null;
+    const installed = mode === "local" ? localProbe!.version : readManifestVersion(globalRoot);
 
     if (mode === "global" && globallyInstalled && !installed) {
       await trackPackageAction(
@@ -391,14 +417,9 @@ export async function update(args: string[]): Promise<void> {
         const verb = isInstalledForMode ? "update" : "install";
         const remedies = {
           localViable: hasProjectPackageJson(projectRoot),
-          argentOnPath: globallyInstalled,
+          argentOnPath,
         };
-        const cause = blockedGlobalInstallMessage(
-          pm,
-          getGloballyInstalledPackageRoot(),
-          verb,
-          remedies
-        );
+        const cause = blockedGlobalInstallMessage(pm, globalRoot, verb, remedies);
         if (cause !== null) {
           await trackPackageAction(
             "update_failed",
@@ -443,15 +464,15 @@ export async function update(args: string[]): Promise<void> {
       // invariant as the launcher's reuse gate and dead-bundle sweep). An
       // unresolvable install dir (fresh install, Yarn PnP) means nothing of
       // ours to stop; the reuse gate retires a stale server on the next call.
-      const installDirToStop =
-        mode === "local" ? localProbe!.packageDir : getGloballyInstalledPackageRoot();
+      const installDirToStop = mode === "local" ? localProbe!.packageDir : globalRoot;
       try {
         if (installDirToStop) {
           await killToolServerForInstallDir(installDirToStop);
         } else if (mode === "global") {
           // The global package root can be unresolvable (Windows .cmd-wrapper
-          // layouts — see getGloballyInstalledPackageRoot). Fall back to the
-          // legacy single-slot record, which only older argent versions write.
+          // layouts — see getGloballyInstalledPackageRoot) with npm holding
+          // nothing either. Fall back to the legacy single-slot record, which
+          // only older argent versions write.
           await killToolServer();
         }
       } catch (err) {
@@ -491,7 +512,8 @@ export async function update(args: string[]): Promise<void> {
                 // realpath, so getLocallyInstalledVersion would read it stale.
                 (readLocalPackageVersionUncached(projectRoot) ??
                 getLocallyInstalledVersion(projectRoot))
-              : getGloballyInstalledVersion();
+              : // Re-resolved: the install may have just created this copy.
+                readManifestVersion(globalInstallRoot());
           // `target` is narrowed non-null by the enclosing if; the closure
           // re-widens it, hence the assertion.
           return landedVersion !== null && !isNewerVersion(target!, landedVersion);
@@ -612,7 +634,7 @@ export async function update(args: string[]): Promise<void> {
     // materialized yet (fresh clone) must not shadow a present global install.
     const flags = parseTargetFlags(args);
     const localInstalled = installMode === "local" && probeLocalInstall(projectRoot).installed;
-    const globalInstalled = isGloballyInstalled();
+    const globalInstalled = globalInstallPresent();
     const defaultTarget: InstallMode = localInstalled
       ? "local"
       : globalInstalled

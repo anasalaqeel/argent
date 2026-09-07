@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { update } from "../src/update.js";
-import { killToolServerForInstallDir } from "@argent/tools-client";
+import { killToolServer, killToolServerForInstallDir } from "@argent/tools-client";
 
 // Declining the update prompt must cancel + exit 0 without the config refresh
 // (entry rewrites, allowlists, stale-config sweep, rules/agents, skills)
@@ -60,21 +60,25 @@ vi.mock("../src/update-target.js", () => ({
     minReleaseAgeMs: 0,
   })),
 }));
-// Mutable install topology read through the utils mock — tests flip these to
-// stage "the global install landed at v99" or "no global install at all".
+// Mutable install topology — tests flip these to stage "no global install at
+// all" or an install under a directory of their own. Mocked at topology.ts
+// rather than at the utils.ts barrel that re-exports it, because
+// global-prefix.ts imports isGloballyInstalled straight from the leaf.
 const topologyState = vi.hoisted(() => ({
   globalInstalled: true,
-  globalVersion: "1.0.0",
   packageRoot: null as string | null,
 }));
 
-vi.mock("../src/utils.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("../src/utils.js")>();
+vi.mock("../src/topology.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/topology.js")>();
   return {
     ...original,
     isGloballyInstalled: vi.fn(() => topologyState.globalInstalled),
-    getGloballyInstalledVersion: vi.fn(() => topologyState.globalVersion),
-    getGloballyInstalledPackageRoot: vi.fn(() => topologyState.packageRoot),
+    // A package root is walked up from the binary PATH names, so there is
+    // never one without it.
+    getGloballyInstalledPackageRoot: vi.fn(() =>
+      topologyState.globalInstalled ? topologyState.packageRoot : null
+    ),
   };
 });
 
@@ -94,6 +98,9 @@ const canTestUnwritable = process.platform !== "win32" && process.getuid?.() !==
 
 let tmpDir: string;
 let projDir: string;
+// Directories a test made unwritable, restored before the teardown removes the
+// tree — rmSync cannot unlink a child of a read-only directory.
+let readOnlyDirs: string[];
 let originalCwd: string;
 let savedHome: string | undefined;
 let savedUserProfile: string | undefined;
@@ -112,9 +119,9 @@ beforeEach(() => {
   // the next test's outcome.
   childProcessMock.execFileSync.mockReset();
   topologyState.globalInstalled = true;
-  topologyState.globalVersion = "1.0.0";
-  topologyState.packageRoot = null;
+  readOnlyDirs = [];
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "argent-update-decline-"));
+  topologyState.packageRoot = stageArgentPackage(stagedGlobalRoot(), "1.0.0");
   originalCwd = process.cwd();
   // Sandbox HOME: the accepted-update path runs the real config refresh, which
   // probes (and would rewrite) global-scope configs under the home directory.
@@ -136,6 +143,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const dir of readOnlyDirs) {
+    try {
+      fs.chmodSync(dir, 0o755);
+    } catch {
+      // Already gone.
+    }
+  }
   exitSpy.mockRestore();
   process.chdir(originalCwd);
   if (savedAgent === undefined) delete process.env.npm_config_user_agent;
@@ -146,6 +160,30 @@ afterEach(() => {
   else process.env.USERPROFILE = savedUserProfile;
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+/**
+ * A real @swmansion/argent package directory at `version` under the
+ * `node_modules` at `root`. Returns the package directory.
+ */
+function stageArgentPackage(root: string, version: string): string {
+  const packageDir = path.join(root, "@swmansion", "argent");
+  fs.mkdirSync(packageDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(packageDir, "package.json"),
+    JSON.stringify({ name: "@swmansion/argent", version, bin: { argent: "dist/cli.js" } })
+  );
+  return packageDir;
+}
+
+/** The `node_modules` the default staged global install sits under. */
+function stagedGlobalRoot(): string {
+  return path.join(tmpDir, "global", "lib", "node_modules");
+}
+
+function stageReadOnly(dir: string): void {
+  fs.chmodSync(dir, 0o555);
+  readOnlyDirs.push(dir);
+}
 
 describe("update — interactive decline", () => {
   it("cancels and exits 0 without installing or refreshing any config", async () => {
@@ -183,7 +221,7 @@ describe("update — interactive decline", () => {
     async () => {
       const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
       fs.mkdirSync(globalRoot, { recursive: true });
-      fs.chmodSync(globalRoot, 0o555);
+      stageReadOnly(globalRoot);
       childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
         args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
 
@@ -222,7 +260,7 @@ describe("update — interactive decline", () => {
       const binDir = path.join(prefix, "bin");
       fs.mkdirSync(globalRoot, { recursive: true });
       fs.mkdirSync(binDir, { recursive: true });
-      fs.chmodSync(binDir, 0o555);
+      stageReadOnly(binDir);
       childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
         if (args[0] === "root") return `${globalRoot}\n`;
         if (args[0] === "prefix") return `${prefix}\n`;
@@ -251,10 +289,10 @@ describe("update — interactive decline", () => {
   it.skipIf(!canTestUnwritable)(
     "uses the installed package's own directory when the manager will not answer",
     async () => {
-      const scopeDir = path.join(tmpDir, "store", "lib", "node_modules", "@swmansion");
-      fs.mkdirSync(scopeDir, { recursive: true });
-      fs.chmodSync(scopeDir, 0o555);
-      topologyState.packageRoot = path.join(scopeDir, "argent");
+      const nodeModules = path.join(tmpDir, "store", "lib", "node_modules");
+      topologyState.packageRoot = stageArgentPackage(nodeModules, "1.0.0");
+      const scopeDir = path.join(nodeModules, "@swmansion");
+      stageReadOnly(scopeDir);
       childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
         if (args[0] === "root") throw new Error("no global directory");
         return undefined;
@@ -276,7 +314,7 @@ describe("update — interactive decline", () => {
       topologyState.globalInstalled = false;
       const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
       fs.mkdirSync(globalRoot, { recursive: true });
-      fs.chmodSync(globalRoot, 0o555);
+      stageReadOnly(globalRoot);
       childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
         args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
 
@@ -298,7 +336,7 @@ describe("update — interactive decline", () => {
       fs.rmSync(path.join(projDir, "package.json"));
       const globalRoot = path.join(tmpDir, "store", "lib", "node_modules");
       fs.mkdirSync(globalRoot, { recursive: true });
-      fs.chmodSync(globalRoot, 0o555);
+      stageReadOnly(globalRoot);
       childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) =>
         args[0] === "root" ? `${globalRoot}\n` : undefined) as never);
 
@@ -315,7 +353,7 @@ describe("update — interactive decline", () => {
     // The mocked package-manager run "lands" the target version on disk —
     // success is decided from the disk, never the exit code alone.
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
-      if (args[0] === "install") topologyState.globalVersion = "99.0.0";
+      if (args[0] === "install") stageArgentPackage(stagedGlobalRoot(), "99.0.0");
       return undefined;
     }) as never);
 
@@ -530,7 +568,7 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     // reaches the refresh.
     childProcessMock.execFileSync.mockImplementation(((_bin: string, args: string[]) => {
       if (Array.isArray(args) && args.some((a) => a.includes("@swmansion/argent"))) {
-        topologyState.globalVersion = "99.0.0";
+        stageArgentPackage(stagedGlobalRoot(), "99.0.0");
       }
       return undefined;
     }) as never);
@@ -544,5 +582,121 @@ describe("update — customized MCP entries survive the refresh and the sweep", 
     ).mcpServers.argent;
     expect(entry.command).toBe("argent");
     expect(entry.args).toEqual(["mcp"]);
+  });
+});
+
+// The prefix move `argent init` performs installs into a bin directory the
+// user's shells do not export until their profile is edited: npm agrees argent
+// is installed there, `which argent` finds nothing. PATH alone cannot tell
+// that run whether there is anything to update.
+describe("update — a global install PATH cannot see", () => {
+  let npmRoot: string;
+  let npmPackageDir: string;
+
+  // `npm root -g` answers with the staged prefix; an install runs the caller's
+  // callback rather than touching anything.
+  const answerNpmRoot = (onGlobalInstall?: () => void, onLocalInstall?: () => void): void => {
+    childProcessMock.execFileSync.mockImplementation(((bin: string, args: string[]) => {
+      if (bin !== "npm" || !Array.isArray(args)) return undefined;
+      if (args[0] === "root") return `${npmRoot}\n`;
+      if (args[0] === "install") (args.includes("-g") ? onGlobalInstall : onLocalInstall)?.();
+      return undefined;
+    }) as never);
+  };
+
+  beforeEach(() => {
+    topologyState.globalInstalled = false;
+    npmRoot = path.join(tmpDir, "npm-global", "lib", "node_modules");
+    npmPackageDir = stageArgentPackage(npmRoot, "1.0.0");
+  });
+
+  it("compares against the version npm holds instead of reinstalling it", async () => {
+    stageArgentPackage(npmRoot, "99.0.0");
+    answerNpmRoot();
+
+    await update(["--yes"]);
+
+    const info = promptsMock.log.info.mock.calls.map(([m]) => plain(m as string));
+    const warns = promptsMock.log.warn.mock.calls.map(([m]) => plain(m as string));
+    const successes = promptsMock.log.success.mock.calls.map(([m]) => plain(m as string));
+    expect(info).toContain("Installed: v99.0.0");
+    expect(warns).not.toContain("@swmansion/argent is not installed globally.");
+    expect(successes).toContain("Already on the latest version.");
+    expect(npmInstallCalls()).toHaveLength(0);
+  });
+
+  it("stops the tool server of the install npm holds, not the legacy single slot", async () => {
+    answerNpmRoot(() => stageArgentPackage(npmRoot, "99.0.0"));
+
+    await update(["--yes"]);
+
+    expect(npmInstallCalls()).toHaveLength(1);
+    // Realpathed: npmGlobalPackageRoot resolves the link npm made, and macOS
+    // hands out /var symlinks for the temp directory.
+    expect(killToolServerForInstallDir).toHaveBeenCalledWith(fs.realpathSync(npmPackageDir));
+    expect(killToolServer).not.toHaveBeenCalled();
+  });
+
+  it("fails an install that never reached npm's directory instead of reporting success", async () => {
+    // The install changes nothing on disk, and the version npm holds is what
+    // decides — a bump that never happened is not a success.
+    answerNpmRoot();
+
+    await expect(update(["--yes"])).rejects.toThrow(ExitSentinel);
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+    expect(
+      errors.some((m) => m.includes("v1.0.0 is still what resolves for the global install"))
+    ).toBe(true);
+    expect(telemetryMock.track).not.toHaveBeenCalledWith(
+      "installation:cli_update_complete",
+      expect.anything()
+    );
+  });
+
+  it.skipIf(!canTestUnwritable)(
+    "spells the per-project way out with npx — npm's copy is no command to run",
+    async () => {
+      answerNpmRoot();
+      stageReadOnly(path.join(npmRoot, "@swmansion"));
+
+      await expect(update(["--yes"])).rejects.toThrow(ExitSentinel);
+
+      const errors = promptsMock.log.error.mock.calls.map(([m]) => plain(m as string));
+      // "update", not "install": npm holds a copy, even though PATH names none.
+      expect(errors.some((m) => m.includes("cannot update @swmansion/argent globally"))).toBe(true);
+      expect(errors.some((m) => m.includes("npx @swmansion/argent init --local"))).toBe(true);
+    }
+  );
+
+  it("is a target of its own beside the project's local install", async () => {
+    fs.writeFileSync(
+      path.join(projDir, "package.json"),
+      JSON.stringify({ name: "proj", devDependencies: { "@swmansion/argent": "^1.0.0" } })
+    );
+    fs.writeFileSync(path.join(projDir, "package-lock.json"), "{}");
+    const localPkgJson = path.join(
+      stageArgentPackage(path.join(projDir, "node_modules"), "1.0.0"),
+      "package.json"
+    );
+    answerNpmRoot(
+      () => stageArgentPackage(npmRoot, "99.0.0"),
+      () =>
+        fs.writeFileSync(
+          localPkgJson,
+          JSON.stringify({ name: "@swmansion/argent", version: "99.0.0" })
+        )
+    );
+
+    await update(["--yes"]);
+
+    const info = promptsMock.log.info.mock.calls.map(([m]) => plain(m as string));
+    expect(
+      info.some((m) => m.includes("Both a global and a project-local install were found"))
+    ).toBe(true);
+    const installs = npmInstallCalls();
+    expect(installs.some(([, args]) => args.includes("-g"))).toBe(true);
+    expect(installs.some(([, args]) => !args.includes("-g"))).toBe(true);
   });
 });
