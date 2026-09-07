@@ -24,6 +24,18 @@ on:
       - "packages/argent-installer/src/**"
       - "packages/argent/src/**"
       - "packages/argent/scripts/**"
+      # The workspace packages bundle-tools.cjs inlines into the installer
+      # bundle those commands run (dist/installer.mjs): every one of them puts
+      # code in it, so a change confined to one reaches every assertion here
+      # without touching an installer file. update-core is inlined through its
+      # compiled dist/, which `npx tsc --build` makes from the source listed.
+      - "packages/registry/src/**"
+      - "packages/telemetry/src/**"
+      - "packages/configuration-core/src/**"
+      - "packages/argent-tools-client/src/**"
+      - "packages/update-core/src/**"
+      - "packages/native-devtools-ios/src/**"
+      - "packages/archive/src/**"
       # The manifest names the bin the scenarios invoke and the version they
       # assert on; the lockfile pins picocolors and @clack/prompts, whose
       # colouring and wrapping every string assertion is written against.
@@ -94,7 +106,7 @@ jobs:
       - name: Build the project's Nix toolchain
         run: nix-build scripts/ci/nix-install/project/toolchain.nix -o "$RUNNER_TEMP/nix-node"
 
-      - name: Scenarios A-C (no global install yet)
+      - name: Scenarios A-G (no global install yet)
         run: |
           export PATH="$RUNNER_TEMP/nix-node/bin:$PATH"
           bash scripts/ci/nix-install/run-e2e.sh preinstall

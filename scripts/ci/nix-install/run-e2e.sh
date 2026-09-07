@@ -13,8 +13,9 @@
 # which takes the root the store's mode bits reserve. The provisioner owns that
 # escalation:
 #
-#   run-e2e.sh preinstall   # scenarios A-C, no global argent must exist yet
-#                           # (A2 covers the same command with no terminal)
+#   run-e2e.sh preinstall   # scenarios A-G, no global argent must exist yet
+#                           # (A2 covers the same command with no terminal;
+#                           #  F and G answer prompts on a pty)
 #   <root> npm install -g --omit=optional --ignore-scripts "$ARGENT_TGZ"
 #   run-e2e.sh update       # scenarios D-E, against the store-resident install
 #
@@ -119,6 +120,103 @@ new_project() {
   printf '%s' "$dir"
 }
 
+# ── Driving a run that asks ───────────────────────────────────────────────────
+#
+# The recovery argent carries out itself only opens where
+# `process.stdin.isTTY === true`, so every scenario that passes --yes or reads
+# stdin from /dev/null stops at the printed advice instead. `script` runs the
+# command on a pty, which is what makes that flag true.
+
+# clack wraps its output to the terminal width, and a pty whose window size was
+# never set reports zero columns, which renders one character per line and
+# leaves nothing here matchable. `script` copies the size from its own stdin,
+# which is a pipe, so the command sets it from inside the pty instead. Wide
+# enough that no line an assertion below looks for is ever broken in two: the
+# longest is the 110-column cause argent prints above the prompt.
+PTY_ROWS=40
+PTY_COLUMNS=200
+
+# Ceiling for one prompt to render, and for a whole run. Together they bound
+# what a prompt nothing answers costs the 30-minute job. Between its two prompts
+# the interactive install unpacks and installs the tarball.
+PTY_PROMPT_TIMEOUT=180
+PTY_RUN_TIMEOUT=300
+
+# One answer per prompt, each held back until that prompt has rendered: the
+# `out` this reads is the transcript `script` is writing as it goes. Piping the
+# whole sequence in up front does not work: a prompt only sees what arrives
+# after it attaches its own keypress listener, and the pty drops what it queued
+# before that. Answers go to stdout, diagnostics to stderr: stdout is the pty.
+pty_feed() {
+  local out="$1" flag="$2"
+  shift 2
+  while [[ "$#" -ge 2 ]]; do
+    local waited=0
+    until found "$out" "$1"; do
+      waited=$((waited + 1))
+      if [[ "$waited" -gt $((PTY_PROMPT_TIMEOUT * 5)) ]]; then
+        printf '  ! prompt never rendered: %s\n' "$1" >&2
+        return 1
+      fi
+      sleep 0.2
+    done
+    printf '%s' "$2"
+    shift 2
+  done
+  # Stdout stays open until pty_run drops `flag`: `script` turns its own stdin
+  # EOF into a keystroke, which would answer whatever prompt is still up.
+  local held=0
+  while [[ -e "$flag" ]] && [[ "$held" -lt $((PTY_RUN_TIMEOUT * 5)) ]]; do
+    held=$((held + 1))
+    sleep 0.2
+  done
+}
+
+# Run `cmd` on a pty, answering its prompts from the marker/keystroke pairs that
+# follow. The transcript lands in `out`, which the assertions read exactly as
+# they read every other scenario's log. Returns the command's own exit code.
+#
+# The answers arrive over a pipe rather than a named fifo: BSD script refuses a
+# fifo on stdin outright ("tcgetattr/ioctl: Operation not supported").
+pty_run() {
+  local out="$1" cmd="$2"
+  shift 2
+  : >"$out"
+  local flag="$out.driving"
+  : >"$flag"
+
+  # util-linux takes the command behind --command and needs --return to exit
+  # with the child's status; BSD script takes it as trailing arguments and exits
+  # with that status anyway. Only util-linux answers --version.
+  local sized="stty rows $PTY_ROWS cols $PTY_COLUMNS 2>/dev/null; $cmd"
+  if script --version >/dev/null 2>&1; then
+    script --quiet --return --flush --command "$sized" "$out" \
+      < <(pty_feed "$out" "$flag" "$@") >/dev/null 2>&1 &
+  else
+    script -q -F "$out" /bin/bash -c "$sized" \
+      < <(pty_feed "$out" "$flag" "$@") >/dev/null 2>&1 &
+  fi
+  local runner="$!"
+
+  # A prompt these pairs do not answer would otherwise hold the pty until the
+  # job's own timeout, with nothing naming the scenario that stalled.
+  local waited=0
+  while kill -0 "$runner" 2>/dev/null; do
+    if [[ "$waited" -gt $((PTY_RUN_TIMEOUT * 5)) ]]; then
+      fail "the run under the pty did not finish within ${PTY_RUN_TIMEOUT}s"
+      kill -9 "$runner" 2>/dev/null
+      break
+    fi
+    waited=$((waited + 1))
+    sleep 0.2
+  done
+  wait "$runner"
+  local rc="$?"
+
+  rm -f "$flag"
+  return "$rc"
+}
+
 # ── Preconditions ─────────────────────────────────────────────────────────────
 
 printf '=== Preconditions (%s) ===\n' "$PHASE"
@@ -152,6 +250,11 @@ pass "runner copy at v$PACKED_VERSION"
 if [[ "$PHASE" == "preinstall" ]]; then
   ! command -v argent >/dev/null || require "argent is already on PATH; the preinstall phase needs a machine without a global install"
   pass "no global argent on PATH"
+
+  # Without it F and G have no pty, argent never asks, and both would assert
+  # against the printed advice A already covers.
+  command -v script >/dev/null || require "script(1) not found; the interactive scenarios need it for a pty"
+  pass "script(1) available for the interactive scenarios"
 fi
 
 # ── Phase: preinstall ─────────────────────────────────────────────────────────
@@ -275,6 +378,67 @@ if [[ "$PHASE" == "preinstall" ]]; then
   else
     fail "argent was not installed into $project/node_modules"
   fi
+
+  # The half A only prints: with a terminal to ask on, argent offers to move
+  # npm's prefix and then carries it out. B proves the printed commands work
+  # when a human runs them, which is a different claim from argent being able to
+  # run them. The second answer cancels the editor step, so the run ends on
+  # argent's own exit rather than on a prompt this file has to keep answering.
+  begin "F. the interactive recovery moves npm's prefix and installs there"
+  home="$(new_home f)"
+  project="$(new_project f)"
+  out="$WORK/f.log"
+  prefix="$home/.npm-global"
+  # Same reason as B: argent's optional deps only add ways for the install
+  # between the two prompts to fail for reasons that are not under test.
+  pty_run "$out" \
+    "cd $(printf %q "$project") && HOME=$(printf %q "$home") npm_config_omit=optional node $(printf %q "$CLI") init --global --no-telemetry --from $(printf %q "$TGZ")" \
+    "How would you like to proceed?" $'\x1b[B\r' \
+    "Which editors should Argent" $'\x03'
+  exit_is "$?" 0
+  contains "$out" "read-only Nix store"
+  contains "$out" "npm prefix set to"
+  # What argent wrote on the user's behalf, rather than what it printed: npm's
+  # own config, and an install in the prefix that config now names.
+  recorded="$(HOME="$home" npm config get prefix)"
+  if [[ "$recorded" == "$prefix" ]]; then
+    pass "npm's prefix is $prefix"
+  else
+    fail "npm's prefix is '$recorded', expected '$prefix'"
+  fi
+  installed="$("$prefix/bin/argent" --version 2>&1 | tail -1)"
+  if [[ "$installed" == "$PACKED_VERSION" ]]; then
+    pass "argent under the moved prefix reports v$installed"
+  else
+    fail "argent under the moved prefix reports '$installed', expected '$PACKED_VERSION'"
+  fi
+  absent "$out" "npm error"
+  absent "$out" "EACCES"
+
+  # The recovery's other branch. Same prompt, first option: nothing is installed
+  # globally and npm's prefix has to be left where it was, since that write
+  # would outlive the run and nobody asked for it.
+  begin "G. the interactive recovery installs into the project instead"
+  home="$(new_home g)"
+  project="$(new_project g)"
+  out="$WORK/g.log"
+  pty_run "$out" \
+    "cd $(printf %q "$project") && HOME=$(printf %q "$home") npm_config_omit=optional node $(printf %q "$CLI") init --global --no-telemetry --from $(printf %q "$TGZ")" \
+    "How would you like to proceed?" $'\r' \
+    "Which editors should Argent" $'\x03'
+  exit_is "$?" 0
+  if [[ -f "$project/node_modules/@swmansion/argent/package.json" ]]; then
+    pass "argent is a devDependency of the Nix-managed project"
+  else
+    fail "argent was not installed into $project/node_modules"
+  fi
+  kept="$(HOME="$home" npm config get prefix)"
+  if [[ "$kept" == "$home/.npm-global" ]]; then
+    fail "the project install moved npm's prefix to $kept"
+  else
+    pass "npm's prefix is untouched at $kept"
+  fi
+  absent "$out" "npm error"
 
 # ── Phase: update ─────────────────────────────────────────────────────────────
 # The reported bug verbatim: argent already lives in the store (it got there
