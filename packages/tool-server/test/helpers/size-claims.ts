@@ -24,7 +24,7 @@ import { advertisedSchema } from "./catalog";
  * about this parameter and nothing else.
  */
 const CLAIMS_SIZE_PLAIN =
-  /full[- ](?:resolution|res\b)|\bunscaled\b|\bpixel[- ]for[- ]pixel\b|\b(?:never|not|no)\s+(?:down)?(?:scaled|scaling|resampled|resampling|resized|resizing)\b|\boriginal\s+dimensions\b|100%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|device\s+|native\s+)?(?:scale|resolution)|\bat\s+(?:the\s+|its\s+)?(?:original|device(?:'s)?)\s+(?:resolution|size|dimensions|scale)\b|["'`]?\bscale["'`]?\s*[:=]\s*1(?:\.0+)?\b/i;
+  /full[- ](?:device\s+)?(?:resolution|res\b)|\bunscaled\b|\bpixel[- ]for[- ]pixel\b|\b(?:never|not|no)\s+(?:down)?(?:scaled|scaling|resampled|resampling|resized|resizing)\b|\boriginal\s+dimensions\b|100%\s*(?:of\s+)?(?:the\s+)?(?:original\s+|device\s+|native\s+)?(?:scale|resolution)|\bat\s+(?:the\s+|its\s+)?(?:original|device(?:'s)?)\s+(?:resolution|size|dimensions|scale)\b|["'`]?\bscale["'`]?\s*[:=]\s*1(?:\.0+)?\b/i;
 
 /**
  * The same vocabulary in spellings that carry no subject of their own. `1:1`,
@@ -38,24 +38,41 @@ const CLAIMS_SIZE_PLAIN =
 const CLAIMS_SIZE_IN_CONTEXT =
   /full[- ]size|\b1:1\b|\b1(?:\.0+)?\s*x\b|\b1(?:\.0+)?\s+scale\b|\b(?:re)?scaled?\s+(?:of\s+|to\s+|at\s+)?1(?:\.0+)?\b/i;
 
-/** What those spellings have to be about before they are a claim. */
+/**
+ * What those spellings have to be about before they are a claim. The result
+ * fields are listed as their own alternatives rather than left to the words
+ * inside them: `_` is a word character and a camelCase hump is not a boundary,
+ * so `\bimages?\b` never matches inside `diff_images` and `\bdiffs?\b` never
+ * matches inside `diffPath` — and a summary line built out of those identifiers
+ * alone is exactly the shape the removed "see diffPath (full size)" bullet had.
+ */
 const IMAGE_SUBJECT =
-  /\b(?:screenshots?|captures?|captured|capturing|images?|pngs?|frames?|diffs?|diffing|baselines?|snapshots?|pixels?|resolutions?|screens?)\b/i;
+  /\b(?:screenshots?|captures?|captured|capturing|images?|pngs?|frames?|diffs?|diffing|baselines?|snapshots?|pixels?|resolutions?|screens?)\b|diff_images|(?:context)?diffPath/i;
 
 /**
- * `at the device's native resolution` says the same thing as the rest of the
- * vocabulary, and is the natural way to write the falsehood on a capture
- * surface — but it is the true thing to say on a recording one, where
- * argent-screen-recording's h264 frames really are taken at it and no
- * `wrong data size` rejection is in reach.
+ * `native resolution` says the same thing as the rest of the vocabulary. The
+ * possessor is optional because the natural spellings drop it — `at native
+ * resolution`, `at its native resolution` — and naming only `device` left every
+ * one of those outside the sweep.
  */
-const CLAIMS_NATIVE = /\bat\s+(?:the\s+)?device(?:'s)?\s+native\s+(?:resolution|size)\b/i;
+const CLAIMS_NATIVE =
+  /\bat\s+(?:the\s+|its\s+)?(?:device(?:'s)?\s+|screen(?:'s)?\s+)?native\s+(?:resolution|size)\b/i;
+
+/**
+ * The whole vocabulary is the natural way to write the falsehood on a capture
+ * surface, and the true thing to say on a recording one: argent-screen-recording's
+ * h264 frames really are taken at the device's own resolution, and no
+ * `wrong data size` rejection is in reach of a recording. So the exemption
+ * covers every arm — sentence by sentence, so it excuses only a sentence that
+ * is itself about a recording.
+ */
 const ABOUT_A_RECORDING = /\brecord(?:s|ed|ing|ings)?\b|\bvideos?\b|\bh264\b|\bmp4\b|\bfps\b/i;
 
 const claimsSize = (sentence: string): boolean => {
+  if (ABOUT_A_RECORDING.test(sentence)) return false;
   if (CLAIMS_SIZE_PLAIN.test(sentence)) return true;
   if (CLAIMS_SIZE_IN_CONTEXT.test(sentence) && IMAGE_SUBJECT.test(sentence)) return true;
-  return CLAIMS_NATIVE.test(sentence) && !ABOUT_A_RECORDING.test(sentence);
+  return CLAIMS_NATIVE.test(sentence);
 };
 
 /**
