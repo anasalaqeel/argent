@@ -29,12 +29,24 @@ vi.mock("node:os", async (importOriginal) => {
 // isGloballyInstalled; pin it per test instead of depending on whether the
 // machine running the suite has argent installed.
 let globallyInstalled = false;
+// npm's separate answer, which globalInstallPresent falls back on: an install
+// under a prefix no shell profile names yet is on no PATH at all, so these two
+// pinned false/true is the whole point of the pair.
+let npmHoldsGlobalInstall = false;
 
 vi.mock("../src/utils.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/utils.js")>();
   return {
     ...original,
     isGloballyInstalled: vi.fn(() => globallyInstalled),
+  };
+});
+
+vi.mock("../src/global-prefix.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../src/global-prefix.js")>();
+  return {
+    ...original,
+    globalInstallPresent: vi.fn(() => globallyInstalled || npmHoldsGlobalInstall),
   };
 });
 
@@ -74,6 +86,7 @@ beforeEach(() => {
   originalAppData = process.env.APPDATA;
   process.env.APPDATA = path.join(home, "AppData", "Roaming");
   globallyInstalled = false;
+  npmHoldsGlobalInstall = false;
 });
 
 afterEach(() => {
@@ -368,8 +381,72 @@ describe("cleanupStaleMcpConfigs", () => {
     });
 
     expect(result.removedCount).toBe(1);
+    // The justification names what was actually established: nothing on PATH
+    // AND nothing in npm's global directory.
+    expect(result.lines.join("\n")).toContain("which is not installed");
     // The entry was the file's only content, so the file itself is pruned.
     expect(fs.existsSync(cursorGlobal)).toBe(false);
+  });
+
+  it("keeps a bare-argent global entry when npm holds an install PATH cannot reach", async () => {
+    // What `argent init` leaves behind after moving npm's prefix: the install
+    // is on disk, its bin directory reaches no shell until a profile is
+    // edited. Deleting the entry here deletes config for a live install.
+    globallyInstalled = false;
+    npmHoldsGlobalInstall = true;
+    const cursorGlobal = path.join(home, ".cursor", "mcp.json");
+    writeJsonFile(cursorGlobal, { mcpServers: { argent: { command: "argent", args: ["mcp"] } } });
+    const confirm = vi.fn(async () => true);
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [cursor],
+      detectedAdapters: [cursor],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: confirm,
+    });
+
+    // Never even offered for removal, and the warning says why it is kept.
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(result.lines.join("\n")).toContain(
+      "argent is installed globally but not on this shell's PATH"
+    );
+    expect(readJsonFile(cursorGlobal).mcpServers).toBeDefined();
+  });
+
+  it("keeps a dead-looking VS Code user-profile entry when npm holds an install", async () => {
+    // The hidden-scope branch reaches the same verdict, and its removal is
+    // just as cross-project.
+    globallyInstalled = false;
+    npmHoldsGlobalInstall = true;
+    const base =
+      process.platform === "darwin"
+        ? path.join(home, "Library", "Application Support")
+        : process.platform === "win32"
+          ? process.env.APPDATA!
+          : path.join(home, ".config");
+    const userMcpJson = path.join(base, "Code", "User", "mcp.json");
+    writeJsonFile(userMcpJson, {
+      servers: { argent: { type: "stdio", command: "argent", args: ["mcp"] } },
+    });
+    const confirm = vi.fn(async () => true);
+
+    const result = await cleanupStaleMcpConfigs({
+      writtenAdapters: [vscode],
+      detectedAdapters: [vscode],
+      installMode: "local",
+      scope: "local",
+      effectiveRoot: root,
+      confirmCrossProjectRemovals: confirm,
+    });
+
+    expect(confirm).not.toHaveBeenCalled();
+    expect(result.removedCount).toBe(0);
+    expect(result.warnedCount).toBe(1);
+    expect(fs.existsSync(userMcpJson)).toBe(true);
   });
 
   it("skips (and warns about) cross-project removals in a non-interactive run", async () => {
@@ -471,6 +548,7 @@ describe("cleanupStaleMcpConfigs", () => {
 
     expect(result.removedCount).toBe(0);
     expect(result.warnedCount).toBe(1);
+    expect(result.lines.join("\n")).toContain("custom env vars");
     expect(fs.existsSync(cursorGlobal)).toBe(true);
   });
 
