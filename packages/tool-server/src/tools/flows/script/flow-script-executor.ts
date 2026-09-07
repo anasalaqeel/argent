@@ -1275,7 +1275,13 @@ function redactTruncated(text: string, raw: readonly FlowScriptSecret[]): string
   if (partial === 0) return scrubbed;
   const shortened = head.slice(0, head.length - partial);
   if (omission) return `${shortened}${omissionMarker(Number(omission[1]) + partial)}`;
-  return `${shortened}${kept![1]}${Number(kept![2]) - partial}${kept![3]}`;
+  // Floored, because the two numbers measure different texts. The runner's
+  // count is of the REASON it read; `partialSecretTail` measures a suffix of
+  // the whole message, so a value long enough to be a prefix of the reason and
+  // of argent's own exit line in front of it takes off more than the reason
+  // ever held. A report that "keeps the first -2 characters" says nothing a
+  // reader can use; zero is what is left of the reason, and it is true.
+  return `${shortened}${kept![1]}${Math.max(0, Number(kept![2]) - partial)}${kept![3]}`;
 }
 
 const OMISSION_RE = /… \[(\d+) more characters omitted]$/;
