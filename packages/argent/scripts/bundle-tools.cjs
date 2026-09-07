@@ -157,6 +157,18 @@ const TRACECFG_SRC = path.resolve(
   "packages/native-devtools-android/assets/argent.tracecfg.pbtxt"
 );
 const TRACECFG_DEST = path.resolve(__dirname, "../assets/argent.tracecfg.pbtxt");
+// Nothing imports these, so esbuild cannot bundle them. The executor resolves
+// the runner from its own `__dirname` and the runner resolves both watchdogs
+// from its module URL, so all three must land flat beside tool-server.cjs.
+const FLOW_SCRIPT_SRC_DIR = path.resolve(
+  WORKSPACE_ROOT,
+  "packages/tool-server/src/tools/flows/script"
+);
+const FLOW_SCRIPT_FILES = [
+  "flow-script-runner.mjs",
+  "flow-script-watchdog-lifeline.mjs",
+  "flow-script-watchdog-deadline.mjs",
+];
 const IOS_RUNNER_SRC = path.resolve(WORKSPACE_ROOT, "packages/ios-device-runner/ArgentRunner");
 const IOS_RUNNER_DEST = path.resolve(__dirname, "../dist/ios-device-runner/ArgentRunner");
 // Local Xcode state that must never ship: per-user schemes/breakpoints and
@@ -376,6 +388,18 @@ const ASSETS = [
         .readdirSync(src, { withFileTypes: true })
         .filter((e) => e.isFile() && e.name.endsWith(".md")).length,
   },
+  ...FLOW_SCRIPT_FILES.map(
+    (name) =>
+      /** @type {Asset} */ ({
+        kind: "file",
+        src: path.join(FLOW_SCRIPT_SRC_DIR, name),
+        dest: path.resolve(__dirname, "../dist", name),
+        required: true,
+        copiedLabel: name,
+        missLabel: name,
+        hint: "This file is required for flow `script` steps.",
+      })
+  ),
 ];
 
 /**
