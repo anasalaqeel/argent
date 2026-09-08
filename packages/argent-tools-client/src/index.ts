@@ -65,6 +65,8 @@ export {
   type MaterializedImage,
 } from "./artifacts.js";
 
+export { resolveOutPath, type OutPathResolution } from "./out-path.js";
+
 export {
   prepareFileInputs,
   applyClientFileDirectives,

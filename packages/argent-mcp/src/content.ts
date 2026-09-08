@@ -1,11 +1,11 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname } from "node:path";
 import {
   materializeArtifacts,
   isArtifactHandle,
+  resolveOutPath,
   type MaterializeContext,
 } from "@argent/tools-client";
 
@@ -114,12 +114,11 @@ export async function toMcpContent(
 async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
   const out = requestedOut(args);
   if (!out) return `Saved: ${scratchPath}`;
-  // `resolve` drops a trailing separator, so a directory-shaped `out` would land
-  // as a regular FILE of that name and block every later write underneath it.
-  if (out.endsWith("/") || out.endsWith(sep)) {
-    return `Saved: ${scratchPath}\nCould not save to ${out}: out names the file to write, not a directory.`;
+  const resolved = resolveOutPath(out);
+  if ("refusal" in resolved) {
+    return `Saved: ${scratchPath}\nCould not save to ${out}: ${resolved.refusal}`;
   }
-  const target = resolve(expandTilde(out));
+  const target = resolved.path;
   try {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, data);
@@ -150,15 +149,6 @@ function unsavedBlocks(args: unknown): ContentBlock[] {
       text: `Could not save to ${out}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
     },
   ];
-}
-
-/**
- * `~` never reaches an MCP arg through a shell, so expand it here rather than
- * creating a directory literally named `~` in the agent's project.
- */
-function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  return p.startsWith("~/") || p.startsWith(`~${sep}`) ? join(homedir(), p.slice(2)) : p;
 }
 
 /**
@@ -376,6 +366,7 @@ export async function flowRunToMcpContent(
       blocks.push(
         ...(await toMcpContent(step.result, step.outputHint, ctx, renderArgsOnly(step.args)))
       );
+      if (step.outputHint === "image") blocks.push(...unhonoredOutBlocks(step.args));
     }
 
     // Snapshot steps carry artifacts instead of a result.
@@ -411,6 +402,24 @@ export async function flowRunToMcpContent(
 function renderArgsOnly(args: unknown): unknown {
   if (!isRecord(args)) return undefined;
   return { includeImageInContext: args.includeImageInContext };
+}
+
+/**
+ * Said when a step's args carried an `out` that {@link renderArgsOnly} withheld.
+ * {@link unsavedBlocks} covers the same case on the direct path and cannot fire
+ * here, since `out` never reaches {@link toMcpContent}: without this the step
+ * reports a pass and a `Saved:` line naming a scratch path, and a PNG an earlier
+ * run left at `out` would be diffed as though it were this capture.
+ */
+function unhonoredOutBlocks(args: unknown): ContentBlock[] {
+  const out = requestedOut(args);
+  if (!out) return [];
+  return [
+    {
+      type: "text",
+      text: `Could not save to ${out}: a flow step's arguments come from the flow file, not from you, so a step never writes to this machine. Any file already at that path is stale - do not diff against it. Call \`screenshot\` with \`out\` directly to keep a capture.`,
+    },
+  ];
 }
 
 /**

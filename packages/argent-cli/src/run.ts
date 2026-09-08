@@ -4,6 +4,7 @@ import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
+  resolveOutPath,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
@@ -55,15 +56,20 @@ function splitOptions(argv: string[]): RunOptions {
       json = true;
       continue;
     }
+    // Trimmed, and empty refused: an empty `--out=` outranks a payload `out` on
+    // precedence and would write neither, and a stray space makes `path.resolve`
+    // read the value as relative, burying the PNG under a directory named " ".
     if (tok === "--out") {
-      const v = argv[i + 1];
+      const v = argv[i + 1]?.trim();
       if (!v) throw new FlagParseException("--out requires a path");
       outPath = v;
       i += 1;
       continue;
     }
     if (tok.startsWith("--out=")) {
-      outPath = tok.slice("--out=".length);
+      const v = tok.slice("--out=".length).trim();
+      if (!v) throw new FlagParseException("--out requires a path");
+      outPath = v;
       continue;
     }
     rest.push(tok);
@@ -120,19 +126,48 @@ function outFromPayload(payload: Record<string, unknown>): string | null {
   return typeof out === "string" && out.trim() ? out.trim() : null;
 }
 
-async function fetchImageToFile(
-  result: { url?: string; path?: string },
-  outPath: string
-): Promise<void> {
-  const url = result.url;
-  if (!url) {
-    throw new Error("Tool result did not include a `url`; cannot save image");
-  }
+/** The legacy `{ url }` bytes for an older tool-server that emits no artifact handle. */
+async function fetchLegacyImage(result: unknown): Promise<Buffer | null> {
+  const url =
+    result && typeof result === "object" && typeof (result as { url?: unknown }).url === "string"
+      ? (result as { url: string }).url
+      : null;
+  if (!url) return null;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
-  const buf = Buffer.from(await res.arrayBuffer());
-  fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-  fs.writeFileSync(outPath, buf);
+  return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Write an image result where the caller asked, and say where it landed. Shares
+ * {@link resolveOutPath} with argent-mcp's writer so `out` cannot mean two things
+ * depending on which client reads it, and reports the absolute path because that
+ * is the spelling `screenshot-diff` can be handed. A failure is returned rather
+ * than thrown: the capture already succeeded and its own path still has to print.
+ */
+async function saveImageTo(
+  out: string,
+  images: MaterializedImage[],
+  result: unknown
+): Promise<{ wrote: string } | { failure: string }> {
+  const resolved = resolveOutPath(out);
+  if ("refusal" in resolved) return { failure: `Could not save to ${out}: ${resolved.refusal}` };
+  const target = resolved.path;
+  try {
+    const bytes = images[0]?.data ?? (await fetchLegacyImage(result));
+    if (!bytes) {
+      return {
+        failure: `Could not save to ${target}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
+      };
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, bytes);
+    return { wrote: target };
+  } catch (err) {
+    return {
+      failure: `Could not save to ${target}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }
 
 function renderResult(
@@ -396,32 +431,26 @@ Examples:
   // schema advertises rather than passing a path nothing on this side reads.
   const imageOut = outPath ?? outFromPayload(payload);
 
-  // Prefer the bytes the materializer already resolved; fall back to fetching the
-  // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (imageOut && meta.outputHint === "image") {
-    try {
-      if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(imageOut)), { recursive: true });
-        fs.writeFileSync(imageOut, images[0]!.data);
-      } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, imageOut);
-      }
-    } catch (err) {
-      console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
-      await trackRunFailure(toolName, startedAt, {
-        error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
-        failure_stage: "cli_run_save_image",
-        failure_area: "cli",
-        error_kind: "unknown",
-      });
-      process.exit(1);
-    }
-  }
+  const saved =
+    imageOut && meta.outputHint === "image" ? await saveImageTo(imageOut, images, result) : null;
 
   if (note) console.error(note);
+  // Printed before a failed save exits: the capture succeeded, and this line is
+  // the only thing naming the PNG it left on disk.
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  if (imageOut && meta.outputHint === "image" && !json) {
-    console.log(`Wrote: ${imageOut}`);
+  if (saved && "failure" in saved) {
+    console.error(saved.failure);
+    await trackRunFailure(toolName, startedAt, {
+      error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
+      failure_stage: "cli_run_save_image",
+      failure_area: "cli",
+      error_kind: "unknown",
+    });
+    process.exit(1);
+  }
+
+  if (saved && !json) {
+    console.log(`Wrote: ${saved.wrote}`);
   }
 }

@@ -519,6 +519,49 @@ describe("toMcpContent with artifact ctx", () => {
     expect(joined).toContain("stale");
   });
 
+  // `resolve` collapses a trailing `/.` and `/..` as well as a bare separator, so
+  // each spelling names a directory the write would otherwise turn into a file.
+  it.each(["/.", "/..", "/"])("refuses an `out` ending in %s", async (tail) => {
+    const dirShaped = join(root, "shotsdir") + tail;
+
+    const result = await toMcpContent(
+      { image: artifactHandle("imgd", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x4b]),
+      },
+      { udid: "DEV-1", out: dirShaped }
+    );
+
+    await expect(fs.stat(join(root, "shotsdir"))).rejects.toThrow();
+    expect((result[1] as { text: string }).text).toContain(
+      "out names the file to write, not a directory"
+    );
+  });
+
+  // The legacy shape's own no-bytes exit: the url yields nothing usable, so the
+  // `out` the caller asked for is as unhonored as on the artifact path.
+  it("says `out` went unwritten when the legacy url yields no valid PNG", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
+    const out = join(root, "legacy-stale.png");
+    await fs.writeFile(out, "yesterday's baseline");
+
+    const result = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("yesterday's baseline");
+    const joined = result.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`Could not save to ${out}`);
+    expect(joined).toContain("stale");
+    vi.unstubAllGlobals();
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
@@ -994,6 +1037,36 @@ describe("flowRunToMcpContent", () => {
       (b): b is { type: "text"; text: string } => b.type === "text" && b.text.startsWith("Saved:")
     );
     expect(saved?.text).not.toContain(victim);
+    // Refused out loud: silence here would leave the step reporting a pass and a
+    // `Saved:` line naming a scratch path, with a stale file still at `out`.
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`Could not save to ${victim}`);
+    expect(joined).toContain("stale");
+  });
+
+  it("says nothing about `out` on a step that asked for none", async () => {
+    const input: FlowExecuteResult = {
+      flow: "plain",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1" },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).not.toContain("Could not save");
   });
 
   it("numbers steps sequentially", async () => {

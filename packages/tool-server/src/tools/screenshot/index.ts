@@ -57,15 +57,16 @@ const zodSchema = z.object({
       "Downscaling algorithm when scale<1 on Chromium. Defaults to lanczos3 (highest quality). Mirrors sim-server's wire enum. Ignored on physical iPhones."
     ),
   // Input-only, like `includeImageInContext`: the write happens on the CLIENT
-  // (argent-mcp's content.ts and argent-cli's run.ts), because the path names the
-  // agent's own filesystem - a different host under `argent link`.
+  // (argent-mcp's content.ts and argent-cli's run.ts, over one shared
+  // `resolveOutPath`), because the path names the agent's own filesystem - a
+  // different host under `argent link`.
   out: z
     .string()
     .trim()
     .min(1)
     .optional()
     .describe(
-      "Save the PNG at this path on YOUR machine instead of the scratch temp path the capture produced. Missing parent directories are created, and an existing file is overwritten. A relative path resolves against your working directory - but `screenshot-diff` resolves one against the tool-server's, so hand it the absolute path reported back in `Saved:`."
+      "Save the PNG at this path on YOUR machine instead of the scratch temp path the capture produced. `~` expands, missing parent directories are created, and an existing file is overwritten. The absolute path is reported back with the capture - pass THAT one on, because `screenshot-diff` resolves a relative `baselinePath` against the tool-server's working directory rather than yours. Only a direct call writes: a flow step's arguments come from the flow file, so a `tool: screenshot` step inside a flow says so and writes nothing."
     ),
 });
 
@@ -194,7 +195,7 @@ export function createScreenshotTool(registry: Registry): ToolDefinition<Params,
       completedMsg: ({ result }) => `Captured screenshot ${result.image.filename}`,
       failedMsg: ({ failureSignal }) => `Failed to capture screenshot: ${failureSignal.error_code}`,
     },
-    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false. The PNG file itself goes wherever the out parameter points, or - with no out - to a scratch path under the system temp directory.
+    description: `Capture a screenshot of the device screen (iOS simulator or physical device, Android emulator, Apple TV simulator, Vega, or Chromium app). Returns { image }; the MCP adapter renders it as a visible image unless the caller passed includeImageInContext: false. On a direct call the PNG file itself goes wherever the out parameter points, or - with no out - to a scratch path under the system temp directory.
 Use when you need a baseline image before an interaction or to inspect the current screen state after a delay.
 Fails if the simulator-server / emulator backend / Chromium CDP is not reachable for the given device.`,
     alwaysLoad: true,

@@ -88,11 +88,7 @@ describe("screenshot tool", () => {
     };
     screenshotTool.zodSchema!.parse(params);
 
-    const result = await screenshotTool.execute(
-      {},
-      { udid: "ABC", includeImageInContext: true, out: "shots/base.png" },
-      { artifacts: new ArtifactStore() }
-    );
+    const result = await screenshotTool.execute({}, params, { artifacts: new ArtifactStore() });
 
     // The PNG is returned as an artifact handle the MCP client materializes —
     // the unreachable `127.0.0.1` media URL is no longer surfaced.
