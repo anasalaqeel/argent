@@ -2,6 +2,7 @@ import type { ServiceRef, ToolCapability } from "@argent/registry";
 import { CHROMIUM_ID_PREFIX, resolveDevice } from "../../utils/device-info";
 import { chromiumJsRuntimeDebuggerRef } from "../../blueprints/chromium-js-runtime-debugger";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { metroPort } from "../../utils/debugger/metro-port";
 
 /**
  * For tools that work on every platform including Chromium: iOS / Android /
@@ -14,7 +15,7 @@ import { canonicalDeviceId } from "../../utils/debugger/device-alias";
  * reachable from the device; see the argent-tv-interact skill.
  */
 export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
   chromium: { app: true },
@@ -44,7 +45,7 @@ export const DEBUGGER_TOOL_CAPABILITY: ToolCapability = {
  *     against the legacy inspector.
  */
 export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
-  apple: { simulator: true, device: true },
+  apple: { simulator: true },
   appleRemote: { simulator: true },
   android: { emulator: true, device: true, unknown: true },
 };
@@ -54,7 +55,7 @@ export const RN_ONLY_TOOL_CAPABILITY: ToolCapability = {
  * for Chromium — its CDP port lives inside the device id — so the 8081 default
  * in the tools' zodSchemas does no harm.
  */
-export function debuggerServiceRef(params: { port: number; device_id?: string }): ServiceRef {
+export function debuggerServiceRef(params: { port?: number; device_id?: string }): ServiceRef {
   // Collapse a forwarded logicalDeviceId back onto the id its device was
   // connected with, so it resolves to the one open debugger instance rather
   // than minting a second URN. See utils/debugger/device-alias.ts.
@@ -66,7 +67,7 @@ export function debuggerServiceRef(params: { port: number; device_id?: string })
     const device = resolveDevice(deviceId);
     return chromiumJsRuntimeDebuggerRef(device);
   }
-  return `JsRuntimeDebugger:${params.port}:${deviceId}`;
+  return `JsRuntimeDebugger:${metroPort(params)}:${deviceId}`;
 }
 
 /**
@@ -75,13 +76,13 @@ export function debuggerServiceRef(params: { port: number; device_id?: string })
  * above: a Metro-backed device holds one session per port, each with its own
  * log file, while a Chromium session carries its port inside the device id.
  *
- * No `canonicalDeviceId` here, unlike the ref: only the Metro blueprint writes
- * the alias map, so no Chromium id is ever a key or a value in it and
- * canonicalizing could not change which side of this split an id falls on.
+ * The Metro half goes through {@linkcode metroPort} for the same reason the ref
+ * does: the blueprint files under the port text of the URN the ref built, so a
+ * caller that omits `port` and takes a provider's must land on that same text.
  */
 export function debuggerReapedScope(params: {
-  port: number;
+  port?: number;
   device_id?: string;
 }): string | undefined {
-  return params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ? undefined : String(params.port);
+  return params.device_id?.startsWith(CHROMIUM_ID_PREFIX) ? undefined : String(metroPort(params));
 }

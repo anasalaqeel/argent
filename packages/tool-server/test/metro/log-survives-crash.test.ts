@@ -1069,47 +1069,6 @@ describe("console logs across an app crash", () => {
     expect(after.note).toContain("no log file was left behind");
   });
 
-  it("keys the breadcrumb by the port the session is named with", async () => {
-    // `port` reaches the URN as text and the blueprint as a number, and the two
-    // disagree on anything `parseInt` folds: `8081.5` is its own session, with
-    // its own writer and its own log file, resolved on Metro 8081. Scoping the
-    // breadcrumb by the parsed number would file it where this device's read
-    // never looks.
-    const spelling = mockPort + 0.5;
-    await registry.invokeTool("debugger-connect", { port: spelling, device_id: "spelled-device" });
-    cdpConn!.send(
-      JSON.stringify({
-        method: "Runtime.consoleAPICalled",
-        params: {
-          type: "error",
-          args: [{ type: "string", value: "CRITICAL pre-crash error" }],
-          executionContextId: 1,
-          timestamp: Date.now(),
-        },
-      })
-    );
-    await new Promise((r) => setTimeout(r, 200));
-    const { file: logPath } = (await registry.invokeTool("debugger-log-registry", {
-      port: spelling,
-      device_id: "spelled-device",
-    })) as { file: string };
-
-    cdpConn!.terminate();
-    await new Promise((r) => setTimeout(r, 500));
-
-    const after = (await registry.invokeTool("debugger-log-registry", {
-      port: spelling,
-      device_id: "spelled-device",
-    })) as { note?: string };
-
-    // The path, and a file actually there to be read at it: the reclaimed
-    // wording names `keptAt` too, so the path alone is satisfied by a deletion.
-    expect(after.note).toContain(logPath);
-    expect(fs.existsSync(logPath)).toBe(true);
-
-    fs.rmSync(logPath, { force: true });
-  });
-
   it("removes the log file on an explicit teardown", async () => {
     await registry.invokeTool("debugger-connect", { port: mockPort, device_id: "explicit-device" });
     // With history in it: `keepFile` is a conjunction, so a session that

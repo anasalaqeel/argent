@@ -6,13 +6,11 @@ import {
   debuggerReapedScope,
   debuggerServiceRef,
 } from "./debugger-service-ref";
+import { metroPortField } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
 
 const zodSchema = z.object({
-  port: z.coerce
-    .number()
-    .default(8081)
-    .describe("Metro server port (ignored for Chromium — its CDP port is encoded in device_id)"),
+  port: metroPortField,
   device_id: z
     .string()
     .describe(

@@ -7,6 +7,7 @@ import {
 import { CHROMIUM_ID_PREFIX } from "../../utils/device-info";
 import { classifyDeviceForTelemetry } from "../../utils/telemetry-platform";
 import { canonicalDeviceId } from "../../utils/debugger/device-alias";
+import { metroPort } from "../../utils/debugger/metro-port";
 import { debuggerServiceRef } from "./debugger-service-ref";
 import type { JsRuntimeDebuggerApi } from "../../blueprints/js-runtime-debugger";
 
@@ -203,7 +204,7 @@ const CHROMIUM_OWN_NOTE_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, str
 export function buildNotConnected(
   reason: DebuggerNotConnectedReason,
   err: unknown,
-  params: { port: number; device_id?: string },
+  params: { port?: number; device_id?: string },
   /** Set by the tool that reports the breadcrumb itself — see OWN_NOTE_GUIDANCE. */
   opts?: { reportsOwnNote?: boolean }
 ): DebuggerNotConnectedResult {
@@ -211,7 +212,9 @@ export function buildNotConnected(
   return {
     status: "not_connected",
     connected: false,
-    ...(isChromium ? {} : { port: params.port }),
+    // Resolved through metroPort so the reported port is the one the resolve
+    // actually used (caller, then provider-published, then 8081).
+    ...(isChromium ? {} : { port: metroPort(params) }),
     reason,
     detail: err instanceof Error ? err.message : String(err),
     guidance:
@@ -258,7 +261,7 @@ export function trackDebuggerOutcome(
  */
 export async function resolveDebuggerService(
   registry: Registry,
-  params: { port: number; device_id?: string }
+  params: { port?: number; device_id?: string }
 ): Promise<JsRuntimeDebuggerApi> {
   const ref = debuggerServiceRef(params);
   return typeof ref === "string"
