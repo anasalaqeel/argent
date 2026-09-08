@@ -7,7 +7,11 @@ import {
   type ServiceEvents,
 } from "@argent/registry";
 import { discoverMetro } from "../utils/debugger/discovery";
-import { externalJsDebuggerUrl, publishedMetroPort } from "../utils/debugger/metro-port";
+import {
+  externalJsDebuggerUrl,
+  isPublishedMetroPort,
+  publishedMetroPort,
+} from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
 import { assertExternalCapability } from "../utils/external-devices";
 import { proxyStart } from "../utils/sim-remote";
@@ -197,6 +201,12 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     if (classifyDevice(deviceId) === "ios-remote") {
       await proxyStart(deviceId, port);
     }
+
+    // Read here, not at dispose: a provider dropping this device is one of the
+    // things that ends the session, and it takes the descriptor with it. Tells
+    // the breadcrumb's readers whether this port is one a later call could
+    // resolve differently.
+    const scopeFromProvider = isPublishedMetroPort(deviceId, port);
 
     /**
      * Mechanism gate for provider-supplied devices. Every tool that speaks CDP
@@ -452,6 +462,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
             // its own log file; without the port that one's death would reclaim
             // this file, and its teardown would replace the record naming it.
             scope: portKey,
+            scopeFromProvider,
           });
         }
         forgetDeviceAlias(api.logicalDeviceId);

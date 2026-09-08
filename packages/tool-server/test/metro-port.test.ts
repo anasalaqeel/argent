@@ -18,6 +18,7 @@ import { reactProfilerFiberTreeTool } from "../src/tools/profiler/react/react-pr
 import { reactProfilerRendersTool } from "../src/tools/profiler/react/react-profiler-renders";
 import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
 import {
+  isPublishedMetroPort,
   metroPort,
   metroPortWasResolved,
   publishedMetroPort,
@@ -261,6 +262,8 @@ describe("debuggerReapedScope agrees with the URN the session is named by", () =
       cause: "runtime-death",
       keptAt: KEPT_LOG,
       scope: filedScope,
+      // What the blueprint records, read while the claim is still live.
+      scopeFromProvider: isPublishedMetroPort(DEVICE_ID, PROVIDER_METRO_PORT),
     });
 
     publishDescriptor({ devices: [] });

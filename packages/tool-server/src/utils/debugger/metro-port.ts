@@ -78,6 +78,19 @@ export function metroPortWasResolved(params: { device_id?: string; port?: number
 }
 
 /**
+ * Whether `port` is the one this device's provider publishes — which is what
+ * makes it the only kind of port a later, identical call can resolve
+ * DIFFERENTLY for the same device.
+ *
+ * Ask while the claim is live, at connect. A provider withdrawing the device is
+ * itself one of the things that ends a session, so by the time that session's
+ * dispose runs the descriptor it was resolved from may already be gone.
+ */
+export function isPublishedMetroPort(deviceId: string, port: number): boolean {
+  return externalClaimForAnyId(deviceId)?.metroPort === port;
+}
+
+/**
  * The CDP socket a provider wants Argent to attach to, in place of the target
  * Metro advertises. Only the socket comes from the provider: Metro still
  * supplies the session's metadata, so this composes with

@@ -298,6 +298,7 @@ describe("the reaped-session key", () => {
         cause: "runtime-death",
         keptAt: "/tmp/argent-logs-1-2-3-4.log",
         scope: "54321",
+        scopeFromProvider: true,
       });
 
       expect(
@@ -308,8 +309,14 @@ describe("the reaped-session key", () => {
     it("refuses to guess between two of a device's sessions", () => {
       // What the scope is FOR. With two records the reader's port is the only
       // thing that says which was asked for, so a miss stays a miss.
-      recordReapedSession("js-runtime-debugger", UDID, "on 8082", { scope: "8082" });
-      recordReapedSession("js-runtime-debugger", UDID, "on 9000", { scope: "9000" });
+      recordReapedSession("js-runtime-debugger", UDID, "on 8082", {
+        scope: "8082",
+        scopeFromProvider: true,
+      });
+      recordReapedSession("js-runtime-debugger", UDID, "on 9000", {
+        scope: "9000",
+        scopeFromProvider: true,
+      });
 
       expect(
         takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })
@@ -336,6 +343,25 @@ describe("the reaped-session key", () => {
       ).toBeUndefined();
     });
 
+    it("refuses a record whose own port was named, however the reader got its own", () => {
+      // The mirror of the case below, and the reason both sides must say so. A
+      // second bundler's session is filed under the port ITS caller named, so a
+      // reader on the resolved port asking about a different session must not be
+      // handed that crash — nor spend the record its own reader is waiting for.
+      recordReapedSession("js-runtime-debugger", UDID, "the 9000 crash", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-9000.log",
+        scope: "9000",
+      });
+
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })
+      ).toBeUndefined();
+      expect(takeReapedSession("js-runtime-debugger", UDID, "9000")?.keptAt).toBe(
+        "/tmp/argent-logs-9000.log"
+      );
+    });
+
     it("stays exact for a port the caller named, which cannot have moved", () => {
       // The second-bundler case. `metroPort` hands back a caller's own port
       // verbatim, so a miss under it is a different session, not a moved key —
@@ -356,9 +382,14 @@ describe("the reaped-session key", () => {
     });
 
     it("stays exact unless a caller opts in, so every other reader is unaffected", () => {
-      // The relaxation is opt-in. Three of the four readers pass no scope at all
-      // and none of them passes this flag, so the default is what they get.
-      recordReapedSession("js-runtime-debugger", UDID, "scoped", { scope: "54321" });
+      // The relaxation is opt-in. Only the two debugger readers pass a scope, and
+      // they are the only ones that pass this flag; the recording and profiler
+      // reads take the default, and their exact key is the only key they have.
+      // Filed as movable, so the reader's default is the only thing refusing it.
+      recordReapedSession("js-runtime-debugger", UDID, "scoped", {
+        scope: "54321",
+        scopeFromProvider: true,
+      });
 
       expect(peekReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
       expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
@@ -368,7 +399,10 @@ describe("the reaped-session key", () => {
       // debugger-log-registry peeks before it takes and only takes when the peek
       // returned something. Relaxing one and not the other makes the peek report
       // a record the take then fails to spend.
-      recordReapedSession("js-runtime-debugger", UDID, "kept", { scope: "54321" });
+      recordReapedSession("js-runtime-debugger", UDID, "kept", {
+        scope: "54321",
+        scopeFromProvider: true,
+      });
 
       expect(
         peekReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })?.salvage

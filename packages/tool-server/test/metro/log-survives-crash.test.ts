@@ -257,6 +257,36 @@ describe("console logs across an app crash", () => {
     fs.rmSync(logPath, { force: true });
   });
 
+  /** A device a descriptor claims, so omitting `port` resolves the provider's. */
+  const PROVIDER_DEVICE = "ext:acme:emulator-5554";
+
+  /** Publish a descriptor putting this provider's Metro on `port`. */
+  function publishProviderDescriptor(port: number, nativeId = "emulator-5554"): void {
+    const file = path.join(os.tmpdir(), `argent-crash-provider-${process.pid}.json`);
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        devices: [
+          {
+            capabilities: ["adb", "js-debugger"],
+            kind: "emulator",
+            metroPort: port,
+            name: "Pixel 9",
+            nativeId,
+            platform: "android",
+            state: "device",
+          },
+        ],
+        id: "acme",
+        name: "Acme IDE",
+        schemaVersion: 1,
+      })
+    );
+    process.env.ARGENT_DEVICE_PROVIDERS = file;
+    // test/setup/ignore-device-providers.ts disables discovery for the suite.
+    delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
+  }
+
   /**
    * Both readers spend the breadcrumb, and both decide whether their key may be
    * forgiven for having moved. A caller's own port is handed back verbatim, so
@@ -289,6 +319,178 @@ describe("console logs across an app crash", () => {
       expect(
         peekReapedSession("js-runtime-debugger", "named-port-registry", OTHER_PORT)?.keptAt
       ).toBe("/tmp/argent-logs-other-bundler.log");
+    });
+
+    it("still delivers the note to a reader whose own port was resolved", async () => {
+      // The other direction, and what the flag exists to allow: a session filed
+      // under the port its provider published, read back after that provider
+      // moved it. Nothing here names a port, so the read resolves 8081 and the
+      // key it computes is not the one the record holds.
+      __resetReapedSessionsForTesting();
+      recordReapedSession("js-runtime-debugger", ["moved-port-device"], "kept", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-provider-port.log",
+        scope: OTHER_PORT,
+        scopeFromProvider: true,
+      });
+
+      const answer = (await registry.invokeTool("debugger-log-registry", {
+        device_id: "moved-port-device",
+      })) as { note?: string };
+
+      expect(answer.note).toContain("/tmp/argent-logs-provider-port.log");
+    });
+
+    it("refuses a provider-ported record when the reader names its own port", async () => {
+      // Isolates the reader's half of the gate: this record IS one whose port
+      // could have moved, so only the fact that the caller named a port keeps
+      // both tools off it.
+      __resetReapedSessionsForTesting();
+      recordReapedSession("js-runtime-debugger", ["named-vs-provider"], "kept", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-provider-port.log",
+        scope: OTHER_PORT,
+        scopeFromProvider: true,
+      });
+
+      const viaRegistry = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "named-vs-provider",
+      })) as { note?: string };
+      expect(viaRegistry.note).toBeUndefined();
+
+      const viaConnect = (await registry.invokeTool("debugger-connect", {
+        port: mockPort,
+        device_id: "named-vs-provider",
+      })) as { note?: string };
+      expect(viaConnect.note).toBeUndefined();
+
+      expect(
+        peekReapedSession("js-runtime-debugger", "named-vs-provider", OTHER_PORT)?.keptAt
+      ).toBe("/tmp/argent-logs-provider-port.log");
+    });
+
+    it("delivers the note on the connected path too, where the peek decides it", async () => {
+      // The success arm resolves the service and peeks before it takes, so it
+      // settles the question separately from the catch arm above. A live
+      // descriptor puts the resolved port on the mock, so the read connects.
+      __resetReapedSessionsForTesting();
+      publishProviderDescriptor(mockPort);
+      try {
+        recordReapedSession("js-runtime-debugger", [PROVIDER_DEVICE], "kept", {
+          cause: "runtime-death",
+          keptAt: "/tmp/argent-logs-provider-port.log",
+          scope: OTHER_PORT,
+          scopeFromProvider: true,
+        });
+
+        const answer = (await registry.invokeTool("debugger-log-registry", {
+          device_id: PROVIDER_DEVICE,
+        })) as { note?: string };
+
+        expect(answer.note).toContain("/tmp/argent-logs-provider-port.log");
+      } finally {
+        delete process.env.ARGENT_DEVICE_PROVIDERS;
+        process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      }
+    });
+
+    it("delivers the note through debugger-connect on a resolved port too", async () => {
+      // debugger-connect decides this on its own, and reports a runtime death.
+      __resetReapedSessionsForTesting();
+      publishProviderDescriptor(mockPort);
+      try {
+        recordReapedSession("js-runtime-debugger", [PROVIDER_DEVICE], "kept", {
+          cause: "runtime-death",
+          keptAt: "/tmp/argent-logs-provider-port.log",
+          scope: OTHER_PORT,
+          scopeFromProvider: true,
+        });
+
+        const answer = (await registry.invokeTool("debugger-connect", {
+          device_id: PROVIDER_DEVICE,
+        })) as { note?: string };
+
+        expect(answer.note).toContain("/tmp/argent-logs-provider-port.log");
+      } finally {
+        delete process.env.ARGENT_DEVICE_PROVIDERS;
+        process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      }
+    });
+
+    /**
+     * The write side, filed by a real session's dispose. Whether the port a
+     * session ran on was the provider's decides whether a later read may
+     * forgive that port for having changed, and only the connect can still see
+     * it: the withdrawal that ends the session takes the descriptor with it.
+     */
+    it("marks the record by whether the session's port was the provider's", async () => {
+      async function crashAndPeek(connect: Record<string, unknown>) {
+        __resetReapedSessionsForTesting();
+        await registry.invokeTool("debugger-connect", connect);
+        cdpConn!.send(
+          JSON.stringify({
+            method: "Runtime.consoleAPICalled",
+            params: {
+              type: "error",
+              args: [{ type: "string", value: "pre-crash" }],
+              executionContextId: 1,
+              timestamp: Date.now(),
+            },
+          })
+        );
+        await new Promise((r) => setTimeout(r, 200));
+        cdpConn!.terminate();
+        await new Promise((r) => setTimeout(r, 500));
+        // Re-resolving disposes the dead session, which is what files the
+        // record. `debugger-status` carries no note, so it does not spend it.
+        await registry.invokeTool("debugger-status", connect);
+        return peekReapedSession(
+          "js-runtime-debugger",
+          connect.device_id as string,
+          String(mockPort)
+        );
+      }
+
+      publishProviderDescriptor(mockPort, "emulator-5599");
+      try {
+        // A device of its own: `debugger-connect` hands back an existing session
+        // rather than opening a socket, and this case needs a fresh one.
+        expect(
+          (await crashAndPeek({ device_id: "ext:acme:emulator-5599" }))?.scopeFromProvider
+        ).toBe(true);
+      } finally {
+        delete process.env.ARGENT_DEVICE_PROVIDERS;
+        process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      }
+
+      // Same port, but named by the caller on a device no descriptor claims, so
+      // nothing about it can move.
+      expect(
+        (await crashAndPeek({ device_id: "own-port-device", port: mockPort }))?.scopeFromProvider
+      ).toBeUndefined();
+    });
+
+    it("keeps a named port exact on the not-connected path too", async () => {
+      // The catch arm again, this time against a record that COULD have moved:
+      // only the caller having named a port keeps it off this one.
+      __resetReapedSessionsForTesting();
+      recordReapedSession("js-runtime-debugger", ["named-dead-metro-provider"], "kept", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-provider-port.log",
+        scope: OTHER_PORT,
+        scopeFromProvider: true,
+      });
+
+      const answer = (await registry.invokeTool("debugger-log-registry", {
+        port: 59998,
+        device_id: "named-dead-metro-provider",
+      })) as { note?: string };
+
+      expect(answer.note).toBeUndefined();
+      expect(
+        peekReapedSession("js-runtime-debugger", "named-dead-metro-provider", OTHER_PORT)?.keptAt
+      ).toBe("/tmp/argent-logs-provider-port.log");
     });
 
     it("debugger-log-registry reports no note on the not-connected path either", async () => {
