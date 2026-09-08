@@ -52,6 +52,7 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
   let initFailure: NativeDevtoolsInitFailure | null = null;
   let calls = 0;
   const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   const api: NativeDevtoolsApi = {
     isEnvSetup: () => false,
     socketPath: "/tmp/mock.sock",
@@ -78,6 +79,10 @@ function makeFailingApi(): { api: NativeDevtoolsApi; ensureCalls: () => number }
       relaunchAdvised.add(bundleId);
     },
     wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
     appConnectionState: async () => "stale_process",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],
@@ -170,6 +175,7 @@ describe("simulator-watcher with api-owned init failure state", () => {
 
     let calls = 0;
     const relaunchAdvised = new Set<string>();
+    const terminalVerdict = new Set<string>();
     const api: NativeDevtoolsApi = {
       isEnvSetup: () => true,
       socketPath: "/tmp/mock.sock",
@@ -188,6 +194,10 @@ describe("simulator-watcher with api-owned init failure state", () => {
         relaunchAdvised.add(bundleId);
       },
       wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+      noteTerminalVerdict: (bundleId: string) => {
+        terminalVerdict.add(bundleId);
+      },
+      verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
       appConnectionState: async () => "stale_process",
       activateNetworkInspection: () => {},
       getNetworkLog: () => [],

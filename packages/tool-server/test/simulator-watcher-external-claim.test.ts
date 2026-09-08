@@ -113,6 +113,8 @@ function makeApi(): NativeDevtoolsApi {
     holdsEndpoint: () => true,
     noteRelaunchAdvice: () => {},
     wasAdvisedToRelaunch: () => false,
+    noteTerminalVerdict: () => {},
+    verdictStands: () => false,
     appConnectionState: async () => "stale_process",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],

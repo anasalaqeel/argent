@@ -311,15 +311,18 @@ export function buildAppStateMessage(
  * is one passive re-probe after a wait — it prescribes no restart, so it cannot
  * reopen the cycle this verdict exists to close.
  *
- * That re-probe is spelled as a test on what the surfaces actually emit. Once
- * the verdict turns terminal the record clears only on a handshake, so a still
+ * That re-probe is spelled as a test on what the surfaces actually emit. While
+ * this service instance lives the record clears only on a handshake, so a still
  * running, still silent app reads either connected (the verdict is gone,
  * `status` with it) or this same block again — never `unregistered`, which
  * carries a `state` these surfaces stop returning. A repeat is therefore also
  * the second-landing test `unregistered`'s own message has to spell out by
- * hand. Two readings answer neither: a quit app, which falls back to asking for
- * a launch, and this service losing the socket, which withdraws the verdict
- * because the premise it rests on became a statement about the socket.
+ * hand. Three readings answer neither: a quit app, which falls back to asking
+ * for a launch; this service losing the socket, which withdraws the verdict
+ * because the premise it rests on became a statement about the socket; and a
+ * dispose, which takes the record with it (`stop-all-simulator-servers` is the
+ * one that leaves the app alive), after which the app is older than the fresh
+ * listener and reads `stale_process` — one restart-app re-derives the verdict.
  */
 function buildInjectionFailedDiagnosis(
   bundleId: string,
@@ -391,41 +394,48 @@ interface NativeDevtoolsUninjectedAdvice {
 }
 
 /**
- * Turn a measured state into the guidance every surface shares, recording the
- * one hand-out that lets a later reading tell a spent remedy from a fresh one.
- * Side-effecting on that record, so `recordAdvice` exists for the reader whose
- * message an agent may never see: `describeIos` doubles as the per-poll tree
- * read behind the wait tools, which discard every hint on a wait that succeeds.
- * A record written for a hint nobody read would let any later process
- * replacement — a crash, a Metro reload, another agent — satisfy a relaunch
- * nobody was asked to perform. Withholding it only ever delays the verdict, so
- * a caller that cannot promise the hint is rendered should not record.
+ * Turn a measured state into the guidance every surface shares, recording what
+ * lets a later reading tell a spent remedy from a fresh one: the hand-out that
+ * prescribed a relaunch, and the verdict once it has been handed out.
+ * Side-effecting on both, so `recordAdvice` exists for the reader whose message
+ * an agent may never see: `describeIos` doubles as the per-poll tree read behind
+ * the wait tools, which discard every hint on a wait that succeeds. A record
+ * written for a hint nobody read would let any later process replacement — a
+ * crash, a Metro reload, another agent — satisfy a relaunch nobody was asked to
+ * perform, or repeat a verdict nobody was shown. Withholding it only ever delays
+ * the verdict, so a caller that cannot promise the hint is rendered should not
+ * record.
  *
- * Only `stale_process` and `unregistered` take part. Their remedies are the two
- * halves of a cycle: `stale_process` prescribes restart-app, which leaves the
- * app younger than the listener and so reads `unregistered`; `unregistered`
- * prescribes a tool-server restart, whose new listener is younger than the app
- * and so reads `stale_process`. An app whose dylib dyld silently skips satisfies
- * both readings forever, so the second half has to stop being prescribed — and
- * it is the half that must go, because obeying it discards this record along
- * with the service instance holding it.
+ * `stale_process` writes the record and `unregistered` spends it. Their remedies
+ * are the two halves of a cycle: `stale_process` prescribes restart-app, which
+ * leaves the app younger than the listener and so reads `unregistered`;
+ * `unregistered` prescribes a tool-server restart, whose new listener is younger
+ * than the app and so reads `stale_process`. An app whose dylib dyld silently
+ * skips satisfies both readings forever, so the second half has to stop being
+ * prescribed — and it is the half that must go, because obeying it discards this
+ * record along with the service instance holding it.
  *
- * The other three states are left alone because their remedies do converge.
- * `connecting` resolves itself: the process ages out of the grace within seconds
- * and the next reading is a verdict. `not_running` asks for a launch, and an app
- * that will not stay running is a crash rather than a load failure — nothing
- * here has seen its process to diagnose. `indeterminate` is the absence of a
- * reading, so there is no injection to claim anything about, and its message
- * already bounds itself to one restart; on ios-remote it is the only state a
- * running app ever reaches, and stranding that host would leave it no reading at
- * all.
+ * `indeterminate` neither writes nor spends it: it repeats the verdict
+ * `unregistered` already handed out, and only while that verdict stands. It
+ * measured nothing, so it can neither reach the verdict on its own nor withdraw
+ * one — and its own remedy escalates to the tool-server restart that would
+ * discard the record the standing verdict rests on.
  *
- * `indeterminate` also prescribes a relaunch, and it deliberately does NOT
- * record one: only a pid change between the `stale_process` hand-out and a later
- * `unregistered` reading proves the process was replaced. `indeterminate` says
- * the process could not be read at all, so an `unregistered` after it may be the
- * same process finally becoming readable — and the terminal diagnosis opens by
- * asserting a relaunch took place.
+ * The other two states are left alone entirely, because their remedies do
+ * converge. `connecting` resolves itself: the process ages out of the grace
+ * within seconds and the next reading is a verdict. `not_running` asks for a
+ * launch, and an app that will not stay running is a crash rather than a load
+ * failure — nothing here has seen its process to diagnose.
+ *
+ * With no verdict standing, `indeterminate` is left alone too, and its own
+ * message — bounded at one restart — is what a reader gets. It deliberately does
+ * NOT record a hand-out: only a pid change between the `stale_process` hand-out
+ * and a later `unregistered` reading proves the process was replaced.
+ * `indeterminate` says the process could not be read at all, so an
+ * `unregistered` after it may be the same process finally becoming readable —
+ * and the terminal diagnosis opens by asserting a relaunch took place. On
+ * ios-remote it is the only state a running app ever reaches, and it hands out
+ * no relaunch there, so no verdict can ever stand for that host to repeat.
  *
  * `terminalRecovery` is the caller's own dead-end guidance, appended only when
  * the advice turns terminal — see {@link INJECTION_FAILED_RECOVERY} for the
@@ -438,34 +448,44 @@ export function adviseOnUninjectedApp(
   terminalRecovery: string,
   options: { recordAdvice?: boolean } = {}
 ): NativeDevtoolsUninjectedAdvice {
+  const records = options.recordAdvice ?? true;
   if (state === "stale_process") {
-    if (options.recordAdvice ?? true) api.noteRelaunchAdvice(bundleId);
-  } else if (state === "indeterminate" && api.wasAdvisedToRelaunch(bundleId)) {
-    // Terminal: the standing verdict is neither withdrawn nor re-argued, where
-    // `indeterminate`'s own remedy would start the restarts again. ios-remote
-    // cannot inspect a process, so it never hands out the relaunch this reads.
-    return { terminal: true, message: buildUnreadableProcessMessage(bundleId) + terminalRecovery };
-  } else if (state === "unregistered" && api.wasAdvisedToRelaunch(bundleId)) {
-    // The diagnosis reasons from "nothing dialed the listener this service
-    // holds". If it no longer holds one, that premise is about the socket, not
-    // the app — and the tool-server restart the diagnosis forecloses is what
-    // takes it back. Non-terminal, so each surface keeps its own non-terminal
-    // spelling (`service_stale` from the precheck), whose remedy is that
-    // restart.
-    if (!api.holdsEndpoint()) {
-      return { terminal: false, message: buildEndpointLostMessage(bundleId, api.socketPath) };
-    }
-    return {
-      terminal: true,
-      message:
-        buildInjectionFailedDiagnosis(
-          bundleId,
-          api.listConnectedBundleIds(),
-          NATIVE_DEVTOOLS_CONNECT_BUDGET_MS
-        ) + terminalRecovery,
-    };
+    if (records) api.noteRelaunchAdvice(bundleId);
+    return { terminal: false, message: buildAppStateMessage(bundleId, state) };
   }
-  return { terminal: false, message: buildAppStateMessage(bundleId, state) };
+
+  // A pid change alone is not the verdict: it is already true one `connecting`
+  // reading after the relaunch, where nothing terminal has been said and the
+  // remedy is to wait. So `unregistered` reaches the verdict from the record,
+  // and `indeterminate` — which measured nothing — only repeats one that was
+  // reached and handed out.
+  const reachesVerdict =
+    (state === "unregistered" && api.wasAdvisedToRelaunch(bundleId)) ||
+    (state === "indeterminate" && api.verdictStands(bundleId));
+  if (!reachesVerdict) return { terminal: false, message: buildAppStateMessage(bundleId, state) };
+
+  // Both readings reason from "nothing dialed the listener this service holds".
+  // If it no longer holds one, that premise is about the socket, not the app —
+  // and the tool-server restart both terminal messages foreclose is what takes
+  // it back. Non-terminal, so each surface keeps its own non-terminal spelling
+  // (`service_stale` from the precheck for `unregistered`), whose remedy is that
+  // restart.
+  if (!api.holdsEndpoint()) {
+    return { terminal: false, message: buildEndpointLostMessage(bundleId, api.socketPath) };
+  }
+  if (state === "indeterminate") {
+    return { terminal: true, message: buildUnreadableProcessMessage(bundleId) + terminalRecovery };
+  }
+  if (records) api.noteTerminalVerdict(bundleId);
+  return {
+    terminal: true,
+    message:
+      buildInjectionFailedDiagnosis(
+        bundleId,
+        api.listConnectedBundleIds(),
+        NATIVE_DEVTOOLS_CONNECT_BUDGET_MS
+      ) + terminalRecovery,
+  };
 }
 
 export interface NativeDevtoolsInitFailure {
@@ -768,6 +788,18 @@ export interface NativeDevtoolsApi {
    */
   wasAdvisedToRelaunch(bundleId: string): boolean;
   /**
+   * Record that the terminal verdict has been handed to an agent for
+   * `bundleId`. Retired wherever the relaunch record is, since a handshake
+   * settles both.
+   */
+  noteTerminalVerdict(bundleId: string): void;
+  /**
+   * Whether that verdict has been handed out and nothing has cleared it since.
+   * The one thing an `indeterminate` reading can consult: it measured nothing,
+   * so it may repeat a verdict but never reach one.
+   */
+  verdictStands(bundleId: string): boolean;
+  /**
    * Activates NSURLProtocol network interception for a specific app. Idempotent,
    * and sticky: re-enabled automatically when the app reconnects after a
    * relaunch.
@@ -973,6 +1005,8 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
     // The pid of the process `appConnectionState` last inspected for a bundle —
     // the current process when `adviseOnUninjectedApp` runs right after it.
     const lastSeenPid = new Map<string, number | null>();
+    // Bundles whose terminal verdict has been handed out and not since cleared.
+    const terminalVerdict = new Set<string>();
     const events = new TypedEventEmitter<ServiceEvents>();
 
     const noteInitFailure = (err: unknown): void => {
@@ -1152,6 +1186,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
             // between two readings, and clearing on a `connected` reading would
             // miss that and hold a verdict against a process that did register.
             relaunchAdvised.delete(bundleId);
+            terminalVerdict.delete(bundleId);
 
             if (activatedBundleIds.has(bundleId)) {
               socket.write(
@@ -1450,6 +1485,10 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         if (!relaunchAdvised.has(bundleId)) return false;
         return relaunchAdvised.get(bundleId) !== (lastSeenPid.get(bundleId) ?? null);
       },
+      noteTerminalVerdict: (bundleId) => {
+        terminalVerdict.add(bundleId);
+      },
+      verdictStands: (bundleId) => terminalVerdict.has(bundleId),
 
       activateNetworkInspection(bundleId) {
         activatedBundleIds.add(bundleId);
@@ -1539,6 +1578,7 @@ export const nativeDevtoolsBlueprint: ServiceBlueprint<NativeDevtoolsApi, Device
         activatedBundleIds.clear();
         relaunchAdvised.clear();
         lastSeenPid.clear();
+        terminalVerdict.clear();
         /**
          * Attach mode owns only its end of the connection: hang up and leave
          * the provider's socket file and server exactly as they were.

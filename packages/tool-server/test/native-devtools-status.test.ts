@@ -56,6 +56,7 @@ function makeNativeApi(options: {
   });
   const isAppRunning = vi.fn(async () => options.appRunning ?? false);
   const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
 
   return {
     api: {
@@ -74,6 +75,10 @@ function makeNativeApi(options: {
         relaunchAdvised.add(bundleId);
       },
       wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+      noteTerminalVerdict: (bundleId: string) => {
+        terminalVerdict.add(bundleId);
+      },
+      verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
       appConnectionState: async () => {
         if (options.connected) return "connected";
         // Mirrors the real API: the unconnected path re-applies the launchd env
@@ -1509,7 +1514,7 @@ describe("native-* tool descriptions document every precheck outcome", () => {
     ],
     [
       "service_stale",
-      "If status is service_stale: the app is already injected, so restarting it cannot help — restart the tool-server (`argent server stop && argent server start --detach`) and retry. If the same status comes back after that restart, stop restarting: follow the message, which names what is left to do.",
+      "If status is service_stale: restart the tool-server (`argent server stop && argent server start --detach`) and retry — the app is already injected, so restarting it cannot help, unless the message says this tool-server no longer owns the simulator's devtools socket, which names both steps in the order they work. If the same status comes back after that restart, stop restarting: follow the message, which names what is left to do.",
     ],
     [
       "injection_failed",

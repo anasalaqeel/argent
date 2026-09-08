@@ -22,6 +22,7 @@ function makeAppState(bundleId: string, overrides: Partial<NativeAppState> = {})
 function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
   const byBundleId = new Map(apps.map((app) => [app.bundleId, app]));
   const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   return {
     isEnvSetup: () => true,
     socketPath: "/tmp/mock.sock",
@@ -38,6 +39,10 @@ function makeApi(apps: NativeAppState[]): NativeDevtoolsApi {
       relaunchAdvised.add(bundleId);
     },
     wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
     appConnectionState: async () => "connected",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],

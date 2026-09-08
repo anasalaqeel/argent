@@ -405,6 +405,47 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
     }
   });
 
+  it("retires a standing verdict at the handshake that answers it", async () => {
+    // The handshake retires the record the verdict was reached from; it has to
+    // retire the verdict too, or an app that connected and then went quiet keeps
+    // being told its dylib never loads — on the one reading that measures
+    // nothing and so cannot notice it did.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let socket: net.Socket | undefined;
+    advance(10_000);
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      expect(
+        adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY).terminal
+      ).toBe(true);
+
+      socket = await connectApp(api, BUNDLE);
+      socket.destroy();
+      for (let i = 0; i < 200 && api.isConnected(BUNDLE); i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      expect(api.isConnected(BUNDLE)).toBe(false);
+
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      expect(
+        adviseOnUninjectedApp(api, BUNDLE, "indeterminate", INJECTION_FAILED_RECOVERY).terminal,
+        "a verdict the app has since answered must not survive its handshake"
+      ).toBe(false);
+    } finally {
+      socket?.destroy();
+      await instance.dispose();
+    }
+  });
+
   it("localises the fault to this app's binary when a peer is connected", async () => {
     // DYLD_INSERT_LIBRARIES is simulator-wide and the listener is one socket, so
     // a connected peer proves the env, the dylib and this service's listener all
@@ -587,6 +628,110 @@ describe("native-devtools — a dylib inserted but silently skipped by dyld", ()
         { udid: UDID, bundleId: BUNDLE }
       );
       expect(feature.status).toBe("injection_failed");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("does not repeat a verdict that was never reached", async () => {
+    // The pid change alone is already true one `connecting` reading after the
+    // relaunch — the app doing exactly what it should, inside its budget. An
+    // unreadable `ps` in that window must not read that as a standing verdict:
+    // the terminal message opens by asserting an earlier reading that measured a
+    // fresh process which never connected, and no such reading happened.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      advance(10_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      // The agent obeys restart-app; the fresh process is still handshaking.
+      advance(1_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(2_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("connecting");
+      expect(api.wasAdvisedToRelaunch(BUNDLE)).toBe(true);
+
+      world.psFails = true;
+      const res = await nativeDevtoolsStatusTool.execute(
+        { nativeDevtools: api },
+        { udid: UDID, bundleId: BUNDLE }
+      );
+      expect("status" in res && res.status).not.toBe("injection_failed");
+      expect("state" in res && res.state).toBe("indeterminate");
+      expect("message" in res ? res.message : "").toContain("Call restart-app then retry");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("withholds the standing verdict from an unreadable read once the socket is gone", async () => {
+    // Both terminal readings rest on "nothing dialed the listener this service
+    // holds". Losing the path makes that a statement about the socket for the
+    // unreadable reading exactly as it is for the measured one, and the app may
+    // be connected to the rival listener — so the reading that repeats the
+    // verdict has to withdraw it on the same terms the one that reached it does.
+    const first = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    let second: Instance | undefined;
+    try {
+      const api = first.api as NativeDevtoolsApi;
+      advance(10_000);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("stale_process");
+      adviseOnUninjectedApp(api, BUNDLE, "stale_process", INJECTION_FAILED_RECOVERY);
+
+      advance(2_000);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("unregistered");
+      expect(
+        adviseOnUninjectedApp(api, BUNDLE, "unregistered", INJECTION_FAILED_RECOVERY).terminal
+      ).toBe(true);
+
+      second = await nativeDevtoolsBlueprint.factory({}, device, { device });
+      expect(api.holdsEndpoint()).toBe(false);
+
+      world.psFails = true;
+      await expect(api.appConnectionState(BUNDLE)).resolves.toBe("indeterminate");
+      const advice = adviseOnUninjectedApp(api, BUNDLE, "indeterminate", INJECTION_FAILED_RECOVERY);
+      expect(advice.terminal).toBe(false);
+      expect(advice.message).toContain(`${SOCKET} is not the endpoint this service bound`);
+      expect(advice.message).not.toContain("do NOT restart the tool-server");
+    } finally {
+      await second?.dispose();
+      await first.dispose();
+    }
+  });
+
+  it("keeps describe's relaunch flag off the unreadable-process verdict", async () => {
+    // `should_restart` is rendered to an agent as "call restart-app and retry"
+    // by await-ui-element's timeout note, and this verdict's message says no
+    // restart on either side changes anything. Shipping both is the loop.
+    const instance = await nativeDevtoolsBlueprint.factory({}, device, { device });
+    try {
+      const api = instance.api as NativeDevtoolsApi;
+      const registry = {
+        resolveService: async (urn: string) => {
+          if (urn.startsWith("NativeDevtools:")) return api;
+          throw new Error("ax-service unavailable in this test");
+        },
+      } as unknown as Parameters<typeof createDescribeTool>[0];
+      const tool = createDescribeTool(registry);
+      const params = { udid: UDID, bundleId: BUNDLE };
+
+      advance(10_000);
+      await tool.execute({}, params);
+      world.execAt = Date.now();
+      world.pid += 1;
+      advance(PAST_CONNECT_BUDGET_MS);
+      expect((await tool.execute({}, params)).should_restart).toBeUndefined();
+
+      world.psFails = true;
+      const unreadable = await tool.execute({}, params);
+      expect(unreadable.hint).toContain("could not be inspected on this read");
+      expect(unreadable.should_restart).toBeUndefined();
     } finally {
       await instance.dispose();
     }

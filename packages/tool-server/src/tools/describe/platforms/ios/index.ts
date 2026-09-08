@@ -176,15 +176,13 @@ interface DescribeIosOptions {
   // iteration. Omitted callers probe once.
   isTvOs?: boolean;
   // Whether this read's `hint` is rendered for an agent rather than discarded.
-  // Only the `describe` tool's own handlers set it, and only they return the
-  // hint as a field: the MCP auto-describe block re-renders a describe read as
-  // `description` alone, so the hint it carried is gone. await-ui-element shows
-  // one, but one poll's worth and only on timeout, while the record is written
-  // per read — opting it in would arm a relaunch hand-out on waits that go on to
-  // succeed, and a later process replacement would then read as a relaunch
-  // nobody performed. The rest never show one to an agent (the Lens preview
-  // serialises a hint for a human, which is not who the record must be promised
-  // to).
+  // Only the `describe` tool's own handlers set it, since only they return the
+  // hint as a field. await-ui-element shows one, but one poll's worth and only
+  // on timeout, while the record is written per read — opting it in would arm a
+  // relaunch hand-out on waits that go on to succeed, and a later process
+  // replacement would then read as a relaunch nobody performed. The rest never
+  // show one to an agent (the Lens preview serialises a hint for a human, which
+  // is not who the record must be promised to).
   hintReachesAgent?: boolean;
 }
 
@@ -331,9 +329,11 @@ export async function describeIos(
       // and retry", the loop instruction with no escape.
       //
       // `should_restart` stays limited to the states a relaunch fixes:
-      // `unregistered` already launched under the terms a restart recreates, and
-      // `connecting` is the handshake exec begins, so flagging either would
-      // rebuild the restart-app → describe loop.
+      // `unregistered` already launched under the terms a restart recreates,
+      // `connecting` is the handshake exec begins, and a terminal verdict says
+      // outright that no restart on either side changes anything — flagging any
+      // of them would rebuild the restart-app → describe loop, and the last
+      // would contradict the message shipped beside it.
       const advice = adviseOnUninjectedApp(
         nativeApi,
         target.bundleId,
@@ -342,7 +342,7 @@ export async function describeIos(
         { recordAdvice: options.hintReachesAgent === true }
       );
       const merged = hint ? `${hint} ${advice.message}` : advice.message;
-      return state === "unregistered" || state === "connecting"
+      return advice.terminal || state === "unregistered" || state === "connecting"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };
     }

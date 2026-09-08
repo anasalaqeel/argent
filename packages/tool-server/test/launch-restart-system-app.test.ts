@@ -46,6 +46,7 @@ const SYSTEM_APP = "com.apple.Preferences";
 // (getInitFailure + ensureEnvReady); the rest must stay untouched.
 function makeNativeApi(): NativeDevtoolsApi {
   const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   return {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
@@ -62,6 +63,10 @@ function makeNativeApi(): NativeDevtoolsApi {
       relaunchAdvised.add(bundleId);
     },
     wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
     appConnectionState: async () => "connected",
     activateNetworkInspection: () => {},
     getNetworkLog: () => [],

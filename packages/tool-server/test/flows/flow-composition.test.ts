@@ -116,12 +116,17 @@ function mockRegistry(props?: Record<string, unknown>): Registry {
  */
 function stubNativeDevtools<T extends object>(api: T): () => Promise<T> {
   const advised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   const service = {
     ...api,
     noteRelaunchAdvice: (bundleId: string) => {
       advised.add(bundleId);
     },
     wasAdvisedToRelaunch: (bundleId: string) => advised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
   };
   return async () => service;
 }

@@ -44,6 +44,7 @@ function makeNativeDevtoolsApi(options: {
 }): NativeDevtoolsApi {
   const connected = new Set(options.connectedBundleIds ?? []);
   const relaunchAdvised = new Set<string>();
+  const terminalVerdict = new Set<string>();
   return {
     isEnvSetup: () => true,
     socketPath: "/tmp/test.sock",
@@ -60,6 +61,10 @@ function makeNativeDevtoolsApi(options: {
       relaunchAdvised.add(bundleId);
     },
     wasAdvisedToRelaunch: (bundleId: string) => relaunchAdvised.has(bundleId),
+    noteTerminalVerdict: (bundleId: string) => {
+      terminalVerdict.add(bundleId);
+    },
+    verdictStands: (bundleId: string) => terminalVerdict.has(bundleId),
     appConnectionState: async () =>
       options.state ?? (options.requiresRestart ? "stale_process" : "connected"),
     activateNetworkInspection: () => {},
