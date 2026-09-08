@@ -7,7 +7,6 @@ import {
   materializeArtifacts,
   isArtifactHandle,
   type MaterializeContext,
-  type MaterializedImage,
 } from "@argent/tools-client";
 
 export type ContentBlock =
@@ -75,14 +74,17 @@ export async function toMcpContent(
 
     if (outputHint === "image") {
       if (images.length > 0) {
-        const saved: ContentBlock = { type: "text", text: await savedText(images[0]!, args) };
+        const saved: ContentBlock = {
+          type: "text",
+          text: await savedText(images[0]!.localPath, images[0]!.data, args),
+        };
         if (suppressImage) return [saved];
         const blocks: ContentBlock[] = images.map((img) => imageBlock(img.data, img.mimeType));
         blocks.push(saved);
         return blocks;
       }
       // No image artifact — fall back to older tool-servers' `{ url, path }`.
-      return legacyImageContent(rewritten, suppressImage);
+      return legacyImageContent(rewritten, suppressImage, args);
     }
 
     const blocks: ContentBlock[] = [{ type: "text", text: stringifyForText(rewritten) }];
@@ -92,7 +94,7 @@ export async function toMcpContent(
   }
 
   if (outputHint === "image") {
-    return legacyImageContent(result, suppressImage);
+    return legacyImageContent(result, suppressImage, args);
   }
 
   return [{ type: "text" as const, text: stringifyForText(result) }];
@@ -101,24 +103,53 @@ export async function toMcpContent(
 /**
  * The `Saved:` line for an image result, honoring the caller's `out` path.
  *
- * A materialized PNG sits in a temp directory that goes away with the session;
- * `out` asks for a copy the agent keeps. It is written HERE rather than by the
- * tool because the path names the agent's filesystem - a different host under
- * `argent link`, and the one `screenshot-diff` resolves a `baselinePath`
- * against. A failed write is reported and the temp path is still handed back,
- * so a bad `out` costs the agent a copy, never the capture.
+ * A materialized PNG sits on a scratch path nobody chose - the capture
+ * backend's own file when the tool-server is co-located, the session cache when
+ * it is remote. `out` asks for a copy where the agent wants it, written HERE
+ * rather than by the tool because the path names the agent's filesystem - a
+ * different host under `argent link`, and the host `screenshot-diff` reads a
+ * `baselinePath` from. A failed write is reported and the scratch path is still
+ * handed back, so a bad `out` costs the agent a copy, never the capture.
  */
-async function savedText(image: MaterializedImage, args: unknown): Promise<string> {
-  const out = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
-  if (!out) return `Saved: ${image.localPath}`;
+async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
+  const out = requestedOut(args);
+  if (!out) return `Saved: ${scratchPath}`;
+  // `resolve` drops a trailing separator, so a directory-shaped `out` would land
+  // as a regular FILE of that name and block every later write underneath it.
+  if (out.endsWith("/") || out.endsWith(sep)) {
+    return `Saved: ${scratchPath}\nCould not save to ${out}: out names the file to write, not a directory.`;
+  }
   const target = resolve(expandTilde(out));
   try {
     await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, image.data);
+    await writeFile(target, data);
     return `Saved: ${target}`;
   } catch (err) {
-    return `Saved: ${image.localPath}\nCould not save to ${target}: ${(err as Error).message}`;
+    return `Saved: ${scratchPath}\nCould not save to ${target}: ${(err as Error).message}`;
   }
+}
+
+/** The path the caller asked the PNG to be kept at, or null if it asked for none. */
+function requestedOut(args: unknown): string | null {
+  const raw = isRecord(args) && typeof args.out === "string" ? args.out.trim() : "";
+  return raw || null;
+}
+
+/**
+ * Said when `out` was asked for and no bytes ever arrived to honor it. Without
+ * it the agent's only signal is a `Saved:` line naming someone else's path (or,
+ * under `includeImageInContext: false`, nothing at all) - and a baseline left at
+ * `out` by an earlier run would be diffed as though it were this capture.
+ */
+function unsavedBlocks(args: unknown): ContentBlock[] {
+  const out = requestedOut(args);
+  if (!out) return [];
+  return [
+    {
+      type: "text",
+      text: `Could not save to ${out}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
+    },
+  ];
 }
 
 /**
@@ -145,25 +176,29 @@ function stringifyForText(value: unknown): string {
  */
 async function legacyImageContent(
   result: unknown,
-  suppressImage: boolean
+  suppressImage: boolean,
+  args: unknown
 ): Promise<ContentBlock[]> {
-  if (result && typeof result === "object" && "url" in result) {
-    const r = result as { url: string; path?: string };
-    if (suppressImage) {
-      return [{ type: "text" as const, text: `Saved: ${r.path ?? ""}` }];
-    }
-    const buf = await fetchPngBytes(r.url);
-    if (buf) {
-      return [imageBlock(buf, "image/png"), { type: "text", text: `Saved: ${r.path ?? ""}` }];
-    }
-    return [
-      {
-        type: "text" as const,
-        text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
-      },
-    ];
+  if (!(result && typeof result === "object" && "url" in result)) {
+    // Not a renderable screenshot at all — an artifact handle that failed to
+    // materialize leaves `{ image: null }` here.
+    return [{ type: "text", text: JSON.stringify(result, null, 2) }, ...unsavedBlocks(args)];
   }
-  return [{ type: "text", text: JSON.stringify(result, null, 2) }];
+  const r = result as { url: string; path?: string };
+  // Suppressing the image normally spares the fetch, but `out` still needs the
+  // bytes — `includeImageInContext: false` plus `out` is the baseline recipe.
+  const buf = suppressImage && !requestedOut(args) ? null : await fetchPngBytes(r.url);
+  if (!buf) {
+    const head: ContentBlock = suppressImage
+      ? { type: "text", text: `Saved: ${r.path ?? ""}` }
+      : {
+          type: "text",
+          text: `(Screenshot unavailable: no valid PNG at ${r.url}. Take a new screenshot.)`,
+        };
+    return [head, ...unsavedBlocks(args)];
+  }
+  const saved: ContentBlock = { type: "text", text: await savedText(r.path ?? "", buf, args) };
+  return suppressImage ? [saved] : [imageBlock(buf, "image/png"), saved];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

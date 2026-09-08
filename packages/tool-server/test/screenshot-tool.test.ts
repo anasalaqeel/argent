@@ -88,7 +88,11 @@ describe("screenshot tool", () => {
     };
     screenshotTool.zodSchema!.parse(params);
 
-    const result = await screenshotTool.execute({}, params, { artifacts: new ArtifactStore() });
+    const result = await screenshotTool.execute(
+      {},
+      { udid: "ABC", includeImageInContext: true, out: "shots/base.png" },
+      { artifacts: new ArtifactStore() }
+    );
 
     // The PNG is returned as an artifact handle the MCP client materializes —
     // the unreachable `127.0.0.1` media URL is no longer surfaced.
@@ -103,8 +107,18 @@ describe("screenshot tool", () => {
     expect(result).not.toHaveProperty("url");
   });
 
-  it("advertises `out` and passes it through as an input-only path the client writes", () => {
-    const registry = { resolveService: vi.fn() } as unknown as import("@argent/registry").Registry;
+  it("advertises `out` and passes it through as an input-only path the client writes", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({ url: "http://localhost/screenshot.png", path: "/tmp/screenshot.png" }),
+      })
+    );
+    const registry = {
+      resolveService: vi.fn().mockResolvedValue({ apiUrl: "http://localhost:4949" }),
+    } as unknown as import("@argent/registry").Registry;
     const screenshotTool = createScreenshotTool(registry);
 
     // An undeclared key would be silently stripped here (and absent from the
@@ -112,7 +126,19 @@ describe("screenshot tool", () => {
     expect(screenshotTool.zodSchema!.parse({ udid: "ABC", out: "shots/base.png" })).toMatchObject({
       out: "shots/base.png",
     });
+    // Whitespace-only would clear `.min(1)` unless it is trimmed first, reaching
+    // the client as an `out` that trims away to nothing and saves in silence.
+    expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "   " })).toThrow();
     expect(() => screenshotTool.zodSchema!.parse({ udid: "ABC", out: "" })).toThrow();
+
+    // Input-only: the client does the write, so `out` must not ride back out on
+    // the result the way a field the tool actually consumed would.
+    const result = await screenshotTool.execute(
+      {},
+      { udid: "ABC", includeImageInContext: true, out: "shots/base.png" },
+      { artifacts: new ArtifactStore() }
+    );
+    expect(result).not.toHaveProperty("out");
   });
 });
 

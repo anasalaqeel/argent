@@ -429,6 +429,96 @@ describe("toMcpContent with artifact ctx", () => {
     expect(result[1]).toEqual({ type: "text", text: `Saved: ${clean}` });
   });
 
+  // `resolve` drops a trailing separator, so this used to create a regular FILE
+  // named `shots` and every later save under `shots/` then failed against it.
+  it("refuses a directory-shaped `out` instead of creating a file of that name", async () => {
+    const dirShaped = `${join(root, "shots")}/`;
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img7", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x48]),
+      },
+      { udid: "DEV-1", out: dirShaped }
+    );
+
+    await expect(fs.stat(join(root, "shots"))).rejects.toThrow();
+    expect(result[0]?.type).toBe("image");
+    const text = (result[1] as { text: string }).text;
+    expect(text).toMatch(/^Saved: .*shot\.png\n/);
+    expect(text).toContain("out names the file to write, not a directory");
+  });
+
+  // A tool-server too old for artifact handles still returns bytes, and the CLI's
+  // `--out` has always written them; `out` must not quietly become a no-op there.
+  it("honors `out` on the legacy { url, path } shape", async () => {
+    vi.stubGlobal("fetch", mockOk([...PNG_SIGNATURE, 0x49]));
+    const out = join(root, "legacy", "base.png");
+
+    const result = await toMcpContent({ url: "http://x/s.png", path: "/host/s.png" }, "image", {
+      toolsUrl: "http://remote:3001",
+      fetchImpl: fetchReturning([]),
+    });
+    expect((result[1] as { text: string }).text).toBe("Saved: /host/s.png");
+
+    const withOut = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out }
+    );
+    expect(await fs.readFile(out)).toEqual(Buffer.from([...PNG_SIGNATURE, 0x49]));
+    expect(withOut[1]).toEqual({ type: "text", text: `Saved: ${out}` });
+    vi.unstubAllGlobals();
+  });
+
+  // Suppressing the image normally spares the fetch — but `out` needs the bytes,
+  // and suppression + `out` is precisely the baseline recipe the skills prescribe.
+  it("still fetches the legacy url for `out` when the image is suppressed", async () => {
+    const fetchMock = mockOk([...PNG_SIGNATURE, 0x4a]);
+    vi.stubGlobal("fetch", fetchMock);
+    const out = join(root, "suppressed.png");
+
+    const result = await toMcpContent(
+      { url: "http://x/s.png", path: "/host/s.png" },
+      "image",
+      { toolsUrl: "http://remote:3001", fetchImpl: fetchReturning([]) },
+      { out, includeImageInContext: false }
+    );
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(await fs.readFile(out)).toEqual(Buffer.from([...PNG_SIGNATURE, 0x4a]));
+    expect(result).toEqual([{ type: "text", text: `Saved: ${out}` }]);
+    vi.unstubAllGlobals();
+  });
+
+  // Nothing came back to write, and a baseline an earlier run left at `out` is
+  // still sitting there — unsaid, `screenshot-diff` would score it as this capture.
+  it("says `out` went unwritten, and calls the file already there stale", async () => {
+    const out = join(root, "baselines", "home.png");
+    await fs.mkdir(join(root, "baselines"), { recursive: true });
+    await fs.writeFile(out, "yesterday's baseline");
+
+    const result = await toMcpContent(
+      { image: artifactHandle("img8", "shot.png", "image/png") },
+      "image",
+      {
+        toolsUrl: "http://remote:3001",
+        deviceId: "DEV-1",
+        fetchImpl: (async () => ({ ok: false })) as unknown as typeof fetch,
+      },
+      { udid: "DEV-1", out, includeImageInContext: false }
+    );
+
+    expect(await fs.readFile(out, "utf8")).toBe("yesterday's baseline");
+    const joined = result.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain(`Could not save to ${out}`);
+    expect(joined).toContain("stale");
+  });
+
   it("rewrites non-image artifacts to local paths inside the JSON result", async () => {
     const result = await toMcpContent(
       { exportedFiles: { cpu: artifactHandle("cpu1", "cpu.xml", "application/xml") } },
