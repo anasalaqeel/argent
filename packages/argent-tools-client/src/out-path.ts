@@ -1,10 +1,14 @@
-/** Resolve a caller's `out` path on the client that writes the file. */
+/** Resolve and write a caller's `out` path, on the client that keeps the file. */
 
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 /** An absolute path to write to, or the reason the request cannot be honored. */
 export type OutPathResolution = { path: string } | { refusal: string };
+
+/** Where the bytes landed, or why they did not. */
+export type OutWriteResult = { wrote: string } | { failure: string };
 
 /**
  * `~` never reaches an argument through a shell — an MCP arg is JSON, and the
@@ -44,4 +48,32 @@ export function resolveOutPath(out: string): OutPathResolution {
     return { refusal: "out names the file to write, not a directory." };
   }
   return { path: resolve(expanded) };
+}
+
+/**
+ * Write `data` to the caller's `out`, creating missing parents.
+ *
+ * Staged through a sibling temp file and renamed into place, so `out` only ever
+ * holds a whole capture: a truncating write leaves a half-written PNG there when
+ * it fails midway, and the destination is a file the caller intends to diff
+ * against later, where a truncated baseline scores as a difference rather than
+ * an error. Rename also makes two clients racing one `out` resolve to one
+ * capture or the other instead of a byte-level mix of both.
+ */
+export async function writeOutFile(out: string, data: Buffer): Promise<OutWriteResult> {
+  const resolved = resolveOutPath(out);
+  if ("refusal" in resolved) return { failure: `Could not save to ${out}: ${resolved.refusal}` };
+  const target = resolved.path;
+  const staged = `${target}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.part`;
+  try {
+    await mkdir(dirname(target), { recursive: true });
+    await writeFile(staged, data);
+    await rename(staged, target);
+    return { wrote: target };
+  } catch (err) {
+    await rm(staged, { force: true }).catch(() => {});
+    return {
+      failure: `Could not save to ${target}: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
 }

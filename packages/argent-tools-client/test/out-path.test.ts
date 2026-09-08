@@ -1,7 +1,8 @@
 import { describe, it, expect, afterEach } from "vitest";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
-import { resolveOutPath } from "../src/out-path.js";
+import { resolveOutPath, writeOutFile } from "../src/out-path.js";
 
 describe("resolveOutPath", () => {
   const realHome = process.env.HOME;
@@ -55,5 +56,77 @@ describe("resolveOutPath", () => {
     expect(resolveOutPath(join(tmpdir(), "..base.png"))).toEqual({
       path: join(tmpdir(), "..base.png"),
     });
+  });
+});
+
+describe("writeOutFile", () => {
+  let root: string;
+  afterEach(async () => {
+    if (root) await rm(root, { recursive: true, force: true });
+  });
+
+  it("creates missing parents and reports the absolute path", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const out = join(root, "a", "b", "shot.png");
+
+    const r = await writeOutFile(out, Buffer.from("png"));
+
+    expect(r).toEqual({ wrote: out });
+    expect(await readFile(out, "utf8")).toBe("png");
+  });
+
+  it("leaves no staging file behind on success", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    await writeOutFile(join(root, "shot.png"), Buffer.from("png"));
+    expect(await readdir(root)).toEqual(["shot.png"]);
+  });
+
+  // The destination is a baseline the caller diffs against later, so a write that
+  // cannot complete must not leave a truncated PNG there. Staging is what makes
+  // this hold: a read-only parent still permits opening the existing file with
+  // O_TRUNC, so a direct write would empty it before failing.
+  it.skipIf(process.getuid?.() === 0)(
+    "leaves the file already at `out` untouched when the write fails",
+    async () => {
+      root = await mkdtemp(join(tmpdir(), "outwrite-"));
+      const dir = join(root, "locked");
+      await mkdir(dir);
+      const out = join(dir, "baseline.png");
+      await writeFile(out, "yesterday's baseline");
+      await chmod(dir, 0o555);
+
+      try {
+        const r = await writeOutFile(out, Buffer.from("a fresh capture"));
+
+        expect(r).toMatchObject({ failure: expect.stringContaining("Could not save to") });
+        expect(await readFile(out, "utf8")).toBe("yesterday's baseline");
+      } finally {
+        await chmod(dir, 0o755);
+      }
+    }
+  );
+
+  it("removes the staging file when the rename cannot be completed", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    // A non-empty directory standing where the file should go: staging succeeds,
+    // the rename onto it does not.
+    const out = join(root, "occupied");
+    await mkdir(out);
+    await writeFile(join(out, "keep"), "keep");
+
+    const r = await writeOutFile(out, Buffer.from("png"));
+
+    expect("failure" in r).toBe(true);
+    expect((await readdir(root)).filter((n) => n.includes(".part"))).toEqual([]);
+    expect(await readdir(out)).toEqual(["keep"]);
+  });
+
+  it("propagates a refusal instead of writing", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const r = await writeOutFile(join(root, "shots") + "/", Buffer.from("png"));
+    expect(r).toEqual({
+      failure: `Could not save to ${join(root, "shots")}/: out names the file to write, not a directory.`,
+    });
+    expect(await readdir(root)).toEqual([]);
   });
 });

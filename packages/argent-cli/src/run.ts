@@ -1,13 +1,13 @@
-import * as fs from "node:fs";
-import * as path from "node:path";
 import {
   createToolsClient,
   materializeArtifacts,
   getDeviceIdFromArgs,
   resolveOutPath,
+  writeOutFile,
   type ToolMeta,
   type ToolsServerPaths,
   type MaterializedImage,
+  type OutWriteResult,
 } from "@argent/tools-client";
 import { init as telemetryInit, shutdown as telemetryShutdown, track } from "@argent/telemetry";
 import { FAILURE_CODES, type FailureCode, type FailureKind } from "@argent/registry";
@@ -149,23 +149,20 @@ async function saveImageTo(
   out: string,
   images: MaterializedImage[],
   result: unknown
-): Promise<{ wrote: string } | { failure: string }> {
+): Promise<OutWriteResult> {
   const resolved = resolveOutPath(out);
   if ("refusal" in resolved) return { failure: `Could not save to ${out}: ${resolved.refusal}` };
-  const target = resolved.path;
   try {
     const bytes = images[0]?.data ?? (await fetchLegacyImage(result));
     if (!bytes) {
       return {
-        failure: `Could not save to ${target}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
+        failure: `Could not save to ${resolved.path}: no image came back, so there was nothing to write. Any file already at that path is stale - do not diff against it.`,
       };
     }
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, bytes);
-    return { wrote: target };
+    return await writeOutFile(out, bytes);
   } catch (err) {
     return {
-      failure: `Could not save to ${target}: ${err instanceof Error ? err.message : String(err)}`,
+      failure: `Could not save to ${resolved.path}: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
 }

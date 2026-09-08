@@ -1,11 +1,10 @@
 /** Convert raw tool results into MCP content blocks (text / image). */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { readFile } from "node:fs/promises";
 import {
   materializeArtifacts,
   isArtifactHandle,
-  resolveOutPath,
+  writeOutFile,
   type MaterializeContext,
 } from "@argent/tools-client";
 
@@ -114,18 +113,8 @@ export async function toMcpContent(
 async function savedText(scratchPath: string, data: Buffer, args: unknown): Promise<string> {
   const out = requestedOut(args);
   if (!out) return `Saved: ${scratchPath}`;
-  const resolved = resolveOutPath(out);
-  if ("refusal" in resolved) {
-    return `Saved: ${scratchPath}\nCould not save to ${out}: ${resolved.refusal}`;
-  }
-  const target = resolved.path;
-  try {
-    await mkdir(dirname(target), { recursive: true });
-    await writeFile(target, data);
-    return `Saved: ${target}`;
-  } catch (err) {
-    return `Saved: ${scratchPath}\nCould not save to ${target}: ${(err as Error).message}`;
-  }
+  const saved = await writeOutFile(out, data);
+  return "wrote" in saved ? `Saved: ${saved.wrote}` : `Saved: ${scratchPath}\n${saved.failure}`;
 }
 
 /** The path the caller asked the PNG to be kept at, or null if it asked for none. */
