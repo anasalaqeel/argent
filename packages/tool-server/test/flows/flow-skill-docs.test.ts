@@ -95,6 +95,21 @@ describe("create-flow selector-scope docs", () => {
 // warn-instead-of-fail change: the two agent-facing descriptions of `idle`
 // have to agree with what it does, and the numbers the prose quotes have to be
 // the ones the parser enforces.
+// The exchange docstring in `flow-script-executor.ts` reasons from a practice
+// the reader has to have been taught, and it names the page that teaches it.
+// The page had no `$ARGENT_OUTPUT` in it at all when that reasoning was
+// written, so the mode the document arrives with rested on nothing.
+describe("bash script exchange docs", () => {
+  const REFERENCE = path.resolve(__dirname, "../../../docs/docs/reference/flow-yaml.mdx");
+
+  it.each([REFERENCE, FLOW_YAML])("teaches the sibling-and-mv pattern in %s", (file) => {
+    const text = readFileSync(file, "utf8");
+    expect(text).toContain("$ARGENT_OUTPUT");
+    expect(text).toMatch(/\$ARGENT_OUTPUT\.new/);
+    expect(text).toMatch(/mv .\$ARGENT_OUTPUT\.new/);
+  });
+});
+
 describe("create-flow idle docs", () => {
   it("the flow-execute description and the reference agree that idle warns rather than fails", () => {
     const description = createRunFlowTool({} as unknown as Registry).description;
