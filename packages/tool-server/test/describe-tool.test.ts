@@ -499,6 +499,30 @@ describe("describe tool", () => {
     expect(result.hint).not.toMatch(/restart-app/);
   });
 
+  it("does NOT return should_restart when devtools are an external provider's lent agent", async () => {
+    // The provider armed the injection and owns the app's lifecycle, so the
+    // message for this state says restarting anything is the provider's call
+    // rather than argent's — `should_restart` beside it would contradict the
+    // prose it ships with and send the agent at a restart-app that re-points
+    // nothing.
+    const axApi = makeAXServiceApi({ alertVisible: false, elements: [] });
+    const nativeApi = makeNativeDevtoolsApi({
+      connectedBundleIds: [],
+      state: "provider_attached",
+    });
+    const registry = makeMockRegistry({ axService: axApi, nativeDevtools: nativeApi });
+    const tool = createDescribeTool(registry);
+
+    const result = await tool.execute(
+      {},
+      { udid: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA", bundleId: "com.example.app" }
+    );
+    expect(result.source).toBe("ax-service");
+    expect(result.should_restart).toBeUndefined();
+    expect(result.hint).toContain("external provider's agent");
+    expect(result.hint).not.toMatch(/restart-app/);
+  });
+
   it("does NOT return should_restart when the app is injected but unregistered", async () => {
     // The process here already launched with this service's injection in place,
     // so a relaunch reproduces it and `should_restart` would rebuild the

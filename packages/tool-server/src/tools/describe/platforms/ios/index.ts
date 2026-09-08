@@ -330,10 +330,11 @@ export async function describeIos(
       //
       // `should_restart` stays limited to the states a relaunch fixes:
       // `unregistered` already launched under the terms a restart recreates,
-      // `connecting` is the handshake exec begins, and a terminal verdict says
+      // `connecting` is the handshake exec begins, `provider_attached` is
+      // someone else's process to relaunch, and a terminal verdict says
       // outright that no restart on either side changes anything — flagging any
       // of them would rebuild the restart-app → describe loop, and the last
-      // would contradict the message shipped beside it.
+      // two would contradict the message shipped beside them.
       const advice = adviseOnUninjectedApp(
         nativeApi,
         target.bundleId,
@@ -342,7 +343,10 @@ export async function describeIos(
         { recordAdvice: options.hintReachesAgent === true }
       );
       const merged = hint ? `${hint} ${advice.message}` : advice.message;
-      return advice.terminal || state === "unregistered" || state === "connecting"
+      return advice.terminal ||
+        state === "unregistered" ||
+        state === "connecting" ||
+        state === "provider_attached"
         ? { tree, source: "ax-service", hint: merged }
         : { tree, source: "ax-service", should_restart: true, hint: merged };
     }
