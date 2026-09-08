@@ -355,7 +355,6 @@ export async function flowRunToMcpContent(
       blocks.push(
         ...(await toMcpContent(step.result, step.outputHint, ctx, renderArgsOnly(step.args)))
       );
-      if (step.outputHint === "image") blocks.push(...unhonoredOutBlocks(step.args));
     }
 
     // Snapshot steps carry artifacts instead of a result.
@@ -391,24 +390,6 @@ export async function flowRunToMcpContent(
 function renderArgsOnly(args: unknown): unknown {
   if (!isRecord(args)) return undefined;
   return { includeImageInContext: args.includeImageInContext };
-}
-
-/**
- * Said when a step's args carried an `out` that {@link renderArgsOnly} withheld.
- * {@link unsavedBlocks} covers the same case on the direct path and cannot fire
- * here, since `out` never reaches {@link toMcpContent}: without this the step
- * reports a pass and a `Saved:` line naming a scratch path, and a PNG an earlier
- * run left at `out` would be diffed as though it were this capture.
- */
-function unhonoredOutBlocks(args: unknown): ContentBlock[] {
-  const out = requestedOut(args);
-  if (!out) return [];
-  return [
-    {
-      type: "text",
-      text: `Could not save to ${out}: a flow step's arguments come from the flow file, not from you, so a step never writes to this machine. Any file already at that path is stale - do not diff against it. Call \`screenshot\` with \`out\` directly to keep a capture.`,
-    },
-  ];
 }
 
 /**

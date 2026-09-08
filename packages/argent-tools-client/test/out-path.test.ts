@@ -29,9 +29,22 @@ describe("resolveOutPath", () => {
   // No shell stands between an agent and this argument, so `~` arrives literal.
   it("expands `~`", () => {
     process.env.HOME = join(tmpdir(), "fake-home");
-    expect(resolveOutPath("~/base.png")).toEqual({ path: join(homedir(), "base.png") });
-    expect(resolveOutPath("~")).toEqual({ path: homedir() });
+    expect(resolveOutPath("~/shots/base.png")).toEqual({
+      path: join(homedir(), "shots", "base.png"),
+    });
   });
+
+  // The tilde expansion runs `join`, which drops a trailing separator and a `.`
+  // segment, so each of these reaches `resolve` looking like a filename.
+  it.each(["~", "~/", "~/shots/", "~/shots/.", "~/shots/.."])(
+    "refuses the directory %j even though expansion would hide its shape",
+    (out) => {
+      process.env.HOME = join(tmpdir(), "fake-home");
+      expect(resolveOutPath(out)).toEqual({
+        refusal: "out names the file to write, not a directory.",
+      });
+    }
+  );
 
   it("does not expand a `~` that is not the whole first segment", () => {
     expect(resolveOutPath("~user/base.png")).toEqual({

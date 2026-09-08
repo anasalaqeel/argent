@@ -63,6 +63,13 @@ function startServer(state: ServerState): Promise<{ url: string; close: () => Pr
       res.end(state.artifactBytes);
       return;
     }
+    // 200 with a body that is not an image, the way a captive proxy or an error
+    // page answers a legacy media URL.
+    if (url === "/not-an-image" && req.method === "GET") {
+      res.setHeader("content-type", "text/html");
+      res.end("<html>gateway error</html>");
+      return;
+    }
     res.statusCode = 404;
     res.end("not found");
   });
@@ -380,6 +387,56 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(logs.join("\n")).toContain(`Saved screenshot: ${handle.hostPath}`);
     expect(errs.join("\n")).toContain("Could not save to");
     expect(logs.join("\n")).not.toContain("Wrote:");
+  });
+
+  // failInvocation's contract for every other rejected run: `--json | jq` on a
+  // failure reads an empty stream and a non-zero status. A save failure printing
+  // the result on stdout would hand jq a parse of a run that did not do what it
+  // was asked.
+  // A legacy media URL is plain HTTP: a proxy or an error page answers 200 with
+  // HTML, and writing that under `out` hands screenshot-diff a non-image baseline.
+  it("refuses to write legacy bytes that are not a PNG", async () => {
+    state.screenshotData = { url: `${server.url}/not-an-image`, path: "/host/shot.png" };
+    const out = join(outDir, "legacy.png");
+
+    await expect(
+      run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", out], opts)
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(errs.join("\n")).toContain("not a PNG");
+    expect(fs.existsSync(out)).toBe(false);
+  });
+
+  it("--json: a failed save leaves stdout empty and reports on stderr", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const blocker = join(outDir, "blocker");
+    await writeFile(blocker, "not a directory");
+
+    await expect(
+      run(
+        ["screenshot", "--args", '{"udid":"SIM-1"}', "--out", join(blocker, "shot.png"), "--json"],
+        opts
+      )
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(logs).toEqual([]);
+    const reported = JSON.parse(errs.join("\n"));
+    expect(reported.error).toContain("Could not save to");
+    // The capture succeeded, so the scratch path it left has to survive.
+    expect(JSON.stringify(reported.result)).toContain(handle.hostPath);
+  });
+
+  it("--json: a successful save keeps stdout to the one result object", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const out = join(outDir, "shot.png");
+
+    await run(["screenshot", "--args", '{"udid":"SIM-1"}', "--out", out, "--json"], opts);
+
+    expect(() => JSON.parse(logs.join("\n"))).not.toThrow();
+    expect(logs.join("\n")).not.toContain("Wrote:");
+    expect(fs.readFileSync(out)).toEqual(PNG);
   });
 
   it("screenshot --json prints the materialized result with a local path, not a handle", async () => {

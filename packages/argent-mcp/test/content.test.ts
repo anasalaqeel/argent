@@ -1022,6 +1022,8 @@ describe("flowRunToMcpContent", () => {
           tool: "screenshot",
           outputHint: "image",
           args: { udid: "DEV-1", out: victim },
+          // The runner says so on the step itself, so every client reports it.
+          warning: `\`out\` was not written: anything already at ${victim} is from an earlier run.`,
           result: { image: artifactHandle("img1", "shot.png", "image/png") },
         },
       ],
@@ -1040,33 +1042,7 @@ describe("flowRunToMcpContent", () => {
     // Refused out loud: silence here would leave the step reporting a pass and a
     // `Saved:` line naming a scratch path, with a stale file still at `out`.
     const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
-    expect(joined).toContain(`Could not save to ${victim}`);
-    expect(joined).toContain("stale");
-  });
-
-  it("says nothing about `out` on a step that asked for none", async () => {
-    const input: FlowExecuteResult = {
-      flow: "plain",
-      steps: [
-        {
-          index: 0,
-          kind: "tool",
-          status: "pass",
-          tool: "screenshot",
-          outputHint: "image",
-          args: { udid: "DEV-1" },
-          result: { image: artifactHandle("img1", "shot.png", "image/png") },
-        },
-      ],
-    };
-    const blocks = await flowRunToMcpContent(input, {
-      toolsUrl: "http://remote:3001",
-      deviceId: "DEV-1",
-      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
-    });
-
-    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
-    expect(joined).not.toContain("Could not save");
+    expect(joined).toContain(`\`out\` was not written`);
   });
 
   it("numbers steps sequentially", async () => {

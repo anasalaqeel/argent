@@ -21,9 +21,14 @@ function expandTilde(p: string): string {
   return p.startsWith("~/") || p.startsWith(`~${sep}`) ? join(homedir(), p.slice(2)) : p;
 }
 
-/** The final path segment, treating both `sep` and `/` as separators. */
-function lastSegment(p: string): string {
-  return p.split(sep).pop()!.split("/").pop()!;
+/**
+ * Whether `p` names a directory by its spelling: `resolve` collapses a trailing
+ * separator, `.` and `..`, so each of those would otherwise land as a regular
+ * FILE of that name and block every later write underneath it.
+ */
+function namesADirectory(p: string): boolean {
+  const last = p.split(sep).pop()!.split("/").pop()!;
+  return last === "" || last === "." || last === "..";
 }
 
 /**
@@ -39,15 +44,14 @@ function lastSegment(p: string): string {
 export function resolveOutPath(out: string): OutPathResolution {
   const trimmed = out.trim();
   if (!trimmed) return { refusal: "out names no path." };
-  const expanded = expandTilde(trimmed);
-  // `resolve` collapses a trailing separator, `.` and `..`, so each of those
-  // spellings names a DIRECTORY that would otherwise land as a regular FILE of
-  // that name and block every later write underneath it.
-  const last = lastSegment(expanded);
-  if (last === "" || last === "." || last === "..") {
+  // Judged on the spelling the caller typed, because `join` inside the tilde
+  // expansion normalizes the directory spellings away: `~/` and `~/shots/.`
+  // arrive at a plain directory path that reads as a filename. A bare `~` never
+  // looks like one at all, so it is named here.
+  if (trimmed === "~" || namesADirectory(trimmed)) {
     return { refusal: "out names the file to write, not a directory." };
   }
-  return { path: resolve(expanded) };
+  return { path: resolve(expandTilde(trimmed)) };
 }
 
 /**
@@ -55,10 +59,10 @@ export function resolveOutPath(out: string): OutPathResolution {
  *
  * Staged through a sibling temp file and renamed into place, so `out` only ever
  * holds a whole capture: a truncating write leaves a half-written PNG there when
- * it fails midway, and the destination is a file the caller intends to diff
- * against later, where a truncated baseline scores as a difference rather than
- * an error. Rename also makes two clients racing one `out` resolve to one
- * capture or the other instead of a byte-level mix of both.
+ * it fails midway, and the destination is a file the caller intends to hand to
+ * `screenshot-diff` a run later, by which time nothing recalls that the write
+ * failed. Rename also makes two clients racing one `out` resolve to one capture
+ * or the other instead of a byte-level mix of both.
  */
 export async function writeOutFile(out: string, data: Buffer): Promise<OutWriteResult> {
   const resolved = resolveOutPath(out);

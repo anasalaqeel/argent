@@ -126,6 +126,8 @@ function outFromPayload(payload: Record<string, unknown>): string | null {
   return typeof out === "string" && out.trim() ? out.trim() : null;
 }
 
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 /** The legacy `{ url }` bytes for an older tool-server that emits no artifact handle. */
 async function fetchLegacyImage(result: unknown): Promise<Buffer | null> {
   const url =
@@ -135,7 +137,16 @@ async function fetchLegacyImage(result: unknown): Promise<Buffer | null> {
   if (!url) return null;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Failed to download image: ${res.status} ${res.statusText}`);
-  return Buffer.from(await res.arrayBuffer());
+  const buf = Buffer.from(await res.arrayBuffer());
+  // A legacy server's media URL is a plain HTTP endpoint, so a proxy or an error
+  // page answers 200 with HTML just as readily as it answers PNG bytes. Writing
+  // that to `out` and reporting a `Wrote:` puts a file that is not an image where
+  // the caller will hand it to `screenshot-diff` as a baseline. argent-mcp's
+  // fetchPngBytes screens the same bytes the same way.
+  if (!buf.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+    throw new Error(`${url} answered ${buf.length} bytes that are not a PNG`);
+  }
+  return buf;
 }
 
 /**
@@ -432,12 +443,18 @@ Examples:
     imageOut && meta.outputHint === "image" ? await saveImageTo(imageOut, images, result) : null;
 
   if (note) console.error(note);
-  // Printed before a failed save exits: the capture succeeded, and this line is
-  // the only thing naming the PNG it left on disk.
-  console.log(renderResult(result, meta.outputHint, images, json));
 
   if (saved && "failure" in saved) {
-    console.error(saved.failure);
+    // Nothing on stdout, matching failInvocation: `--json | jq` on a failed run
+    // reads an empty stream and a non-zero status. The capture still succeeded,
+    // so the result rides along on stderr - it is the only thing naming the PNG
+    // the run did leave on disk.
+    if (json) {
+      console.error(JSON.stringify({ error: saved.failure, result }, null, 2));
+    } else {
+      console.log(renderResult(result, meta.outputHint, images, json));
+      console.error(saved.failure);
+    }
     await trackRunFailure(toolName, startedAt, {
       error_code: FAILURE_CODES.CLI_RUN_SAVE_IMAGE_FAILED,
       failure_stage: "cli_run_save_image",
@@ -447,6 +464,9 @@ Examples:
     process.exit(1);
   }
 
+  console.log(renderResult(result, meta.outputHint, images, json));
+
+  // Suppressed under `--json` so stdout stays one parseable object.
   if (saved && !json) {
     console.log(`Wrote: ${saved.wrote}`);
   }
