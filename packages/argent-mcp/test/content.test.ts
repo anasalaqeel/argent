@@ -445,13 +445,18 @@ describe("toMcpContent with artifact ctx", () => {
 
 describe("flowRunToMcpContent", () => {
   let originalFetch: typeof globalThis.fetch;
+  let root: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     originalFetch = globalThis.fetch;
+    root = await mkdtemp(join(tmpdir(), "content-flow-"));
+    process.env.ARGENT_ARTIFACTS_DIR = root;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     globalThis.fetch = originalFetch;
+    delete process.env.ARGENT_ARTIFACTS_DIR;
+    await rm(root, { recursive: true, force: true });
   });
 
   it("produces header and footer text blocks", async () => {
@@ -864,6 +869,41 @@ describe("flowRunToMcpContent", () => {
     // [3] is JSON result
     expect(texts[4]).toBe("[3] End");
     expect(texts[5]).toContain("complete");
+  });
+
+  // A step's `args` are the flow YAML echoed back by the tool-server, so under
+  // `argent link` a remote host picks them. `out` is a path on THIS machine and
+  // `savedText` truncates whatever is there, so it must not cross the wire
+  // boundary — only the render toggle does.
+  it("ignores `out` in a step's echoed args and leaves the named file alone", async () => {
+    const victim = join(root, "notes.txt");
+    await fs.writeFile(victim, "important user notes");
+
+    const input: FlowExecuteResult = {
+      flow: "poison",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: victim },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    expect(await fs.readFile(victim, "utf8")).toBe("important user notes");
+    const saved = blocks.find(
+      (b): b is { type: "text"; text: string } => b.type === "text" && b.text.startsWith("Saved:")
+    );
+    expect(saved?.text).not.toContain(victim);
   });
 
   it("numbers steps sequentially", async () => {

@@ -57,6 +57,11 @@ export async function toMcpContent(
   result: unknown,
   outputHint?: string,
   ctx?: ContentContext,
+  /**
+   * The MCP caller's own arguments. `out` is read from here and written to THIS
+   * machine's filesystem, so a caller relaying args that arrived over the wire
+   * must launder them first - see {@link renderArgsOnly}.
+   */
   args?: unknown
 ): Promise<ContentBlock[]> {
   // `includeImageInContext: false` asks for the saved-path text only — no inline image.
@@ -333,7 +338,9 @@ export async function flowRunToMcpContent(
     });
 
     if (step.result !== undefined) {
-      blocks.push(...(await toMcpContent(step.result, step.outputHint, ctx, step.args)));
+      blocks.push(
+        ...(await toMcpContent(step.result, step.outputHint, ctx, renderArgsOnly(step.args)))
+      );
     }
 
     // Snapshot steps carry artifacts instead of a result.
@@ -356,6 +363,19 @@ export async function flowRunToMcpContent(
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
   }
   return blocks;
+}
+
+/**
+ * The subset of a step's `args` that may steer rendering. A step's args are the
+ * flow YAML's `args:` mapping echoed back by the tool-server - wire data, and
+ * under `argent link` chosen by a different host - while `out` makes
+ * {@link toMcpContent} write to that path on this machine. So the toggle
+ * crosses and nothing else does; a new render arg has to be added here
+ * deliberately.
+ */
+function renderArgsOnly(args: unknown): unknown {
+  if (!isRecord(args)) return undefined;
+  return { includeImageInContext: args.includeImageInContext };
 }
 
 /**

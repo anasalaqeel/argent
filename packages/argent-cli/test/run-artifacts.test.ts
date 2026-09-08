@@ -190,6 +190,56 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(logs.join("\n")).toContain("Saved screenshot: /host/legacy.png");
   });
 
+  // `--out` is stripped before the schema parser, so the tool's own `out` property
+  // is reachable only through `--args` / `--out-json`. Those spellings used to
+  // travel to a tool that never reads them and write nothing, silently.
+  it("honors the tool's own `out` property when it arrives through --args", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const outPath = join(outDir, "from-args.png");
+
+    await run(["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: outPath })], opts);
+
+    expect(fs.readFileSync(outPath)).toEqual(PNG);
+    expect(logs.join("\n")).toContain(`Wrote: ${outPath}`);
+  });
+
+  it("honors the tool's own `out` property when it arrives through --out-json", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const outPath = join(outDir, "from-out-json.png");
+
+    await run(
+      ["screenshot", "--args", '{"udid":"SIM-1"}', "--out-json", JSON.stringify(outPath)],
+      opts
+    );
+
+    expect(fs.readFileSync(outPath)).toEqual(PNG);
+    expect(logs.join("\n")).toContain(`Wrote: ${outPath}`);
+  });
+
+  it("lets an explicit --out win over an `out` carried in the payload", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const flagPath = join(outDir, "flag.png");
+    const payloadPath = join(outDir, "payload.png");
+
+    await run(
+      [
+        "screenshot",
+        "--args",
+        JSON.stringify({ udid: "SIM-1", out: payloadPath }),
+        "--out",
+        flagPath,
+      ],
+      opts
+    );
+
+    expect(fs.readFileSync(flagPath)).toEqual(PNG);
+    expect(fs.existsSync(payloadPath)).toBe(false);
+    expect(logs.join("\n")).toContain(`Wrote: ${flagPath}`);
+  });
+
   it("screenshot --json prints the materialized result with a local path, not a handle", async () => {
     const handle = await localScreenshotHandle();
     state.screenshotData = { image: handle };

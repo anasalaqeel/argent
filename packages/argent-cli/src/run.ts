@@ -34,15 +34,17 @@ interface RunOptions {
   argvForFlags: string[];
 }
 
-// Flags `splitOptions` strips before the schema-driven parser ever runs. A tool
-// property of the same name can't be reached through its flag, so it must not be
-// offered in the per-tool Flags block — where it would duplicate the Global flags
-// entry below (e.g. `screenshot`'s `out`).
+// Global flags that already do what a tool property of the same name asks — the
+// `--out` below writes an image result wherever it is pointed. Listing such a
+// property in the per-tool Flags block would print the same flag twice in one
+// help screen (e.g. `screenshot`'s `out`).
 const GLOBAL_FLAG_NAMES = new Set(["json", "out"]);
 
 function splitOptions(argv: string[]): RunOptions {
   // Consumed here rather than by the schema-driven flag parser, so a tool with its
-  // own "json" or "out" property can't capture them (see GLOBAL_FLAG_NAMES).
+  // own "json" or "out" property can't capture the bare `--out`/`--json` spellings.
+  // Others (`--out-json`, `--args`) still reach the payload, where `outFromPayload`
+  // picks the property up.
   let json = false;
   let outPath: string | null = null;
   const rest: string[] = [];
@@ -103,13 +105,19 @@ function printToolHelp(meta: ToolMeta): void {
   console.log("  --help, -h             Show this help");
 }
 
-/** Drop schema properties whose name a global flag shadows, so the per-tool Flags
- *  block never lists a flag `splitOptions` would intercept before the tool sees it. */
+/** Drop schema properties a global flag already covers, so the per-tool Flags block
+ *  never prints a second row for a flag the Global flags block lists below it. */
 function withoutGlobalFlagProps(schema: JsonSchema | undefined): JsonSchema | undefined {
   if (!schema?.properties) return schema;
   const kept = Object.entries(schema.properties).filter(([name]) => !GLOBAL_FLAG_NAMES.has(name));
   if (kept.length === Object.keys(schema.properties).length) return schema;
   return { ...schema, properties: Object.fromEntries(kept) };
+}
+
+/** A tool's own `out` property, when it named a path. */
+function outFromPayload(payload: Record<string, unknown>): string | null {
+  const out = payload.out;
+  return typeof out === "string" && out.trim() ? out.trim() : null;
 }
 
 async function fetchImageToFile(
@@ -383,15 +391,20 @@ Examples:
     process.exit(1);
   }
 
+  // `--out` wins; without it a tool's own `out` property names the destination, so
+  // the spellings that reach the payload (`--args`, `--out-json`) do what the
+  // schema advertises rather than passing a path nothing on this side reads.
+  const imageOut = outPath ?? outFromPayload(payload);
+
   // Prefer the bytes the materializer already resolved; fall back to fetching the
   // legacy `{ url }` for older tool-servers that don't emit artifact handles.
-  if (outPath && meta.outputHint === "image") {
+  if (imageOut && meta.outputHint === "image") {
     try {
       if (images.length > 0) {
-        fs.mkdirSync(path.dirname(path.resolve(outPath)), { recursive: true });
-        fs.writeFileSync(outPath, images[0]!.data);
+        fs.mkdirSync(path.dirname(path.resolve(imageOut)), { recursive: true });
+        fs.writeFileSync(imageOut, images[0]!.data);
       } else if (result && typeof result === "object") {
-        await fetchImageToFile(result as { url?: string; path?: string }, outPath);
+        await fetchImageToFile(result as { url?: string; path?: string }, imageOut);
       }
     } catch (err) {
       console.error(`Failed to save image: ${err instanceof Error ? err.message : err}`);
@@ -408,7 +421,7 @@ Examples:
   if (note) console.error(note);
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  if (outPath && meta.outputHint === "image" && !json) {
-    console.log(`Wrote: ${outPath}`);
+  if (imageOut && meta.outputHint === "image" && !json) {
+    console.log(`Wrote: ${imageOut}`);
   }
 }
