@@ -9,6 +9,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
+  peekReapedSession,
   recordReapedSession,
   takeReapedSession,
   describeReapedSession,
@@ -262,6 +263,30 @@ describe("the reaped-session key", () => {
     ).not.toContain("a provider changing what it grants");
   });
 
+  it("reads one teardown the same way under either of its ids", () => {
+    // A Metro session files one event under the connect id AND the opaque
+    // logicalDeviceId. That handle classifies by shape, and a 40-hex one reads
+    // as an Android serial, so a gate asking only this copy's own id would put
+    // the provider clause on the logicalDeviceId copy of a remote iOS session —
+    // a grant that device cannot have.
+    const remote = "remote:11112222-3333-4444-5555-666677778888";
+    const logical = "a".repeat(40);
+    recordReapedSession("js-runtime-debugger", [remote, logical], "");
+
+    const viaLogical = describeReapedSession(
+      takeReapedSession("js-runtime-debugger", logical)!,
+      "JS-runtime debugger session"
+    );
+    expect(viaLogical).not.toContain("a provider changing what it grants");
+
+    recordReapedSession("js-runtime-debugger", [remote, logical], "");
+    const viaConnectId = describeReapedSession(
+      takeReapedSession("js-runtime-debugger", remote)!,
+      "JS-runtime debugger session"
+    );
+    expect(viaConnectId).not.toContain("a provider changing what it grants");
+  });
+
   /**
    * A `scope` is the port the session RESOLVED to, and a provider publishes
    * that port, so it is not guaranteed to still read the same at the read —
@@ -275,9 +300,9 @@ describe("the reaped-session key", () => {
         scope: "54321",
       });
 
-      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")?.keptAt).toBe(
-        "/tmp/argent-logs-1-2-3-4.log"
-      );
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })?.keptAt
+      ).toBe("/tmp/argent-logs-1-2-3-4.log");
     });
 
     it("refuses to guess between two of a device's sessions", () => {
@@ -286,7 +311,9 @@ describe("the reaped-session key", () => {
       recordReapedSession("js-runtime-debugger", UDID, "on 8082", { scope: "8082" });
       recordReapedSession("js-runtime-debugger", UDID, "on 9000", { scope: "9000" });
 
-      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })
+      ).toBeUndefined();
       expect(takeReapedSession("js-runtime-debugger", UDID, "9000")?.salvage).toBe("on 9000");
     });
 
@@ -294,7 +321,9 @@ describe("the reaped-session key", () => {
       recordReapedSession("js-runtime-debugger", "other-device", "theirs", { scope: "54321" });
       recordReapedSession("screen-recording", UDID, "a recording", { scope: "54321" });
 
-      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })
+      ).toBeUndefined();
     });
 
     it("stays exact for a reader that names no scope", () => {
@@ -302,7 +331,51 @@ describe("the reaped-session key", () => {
       // filed under one must not answer a scopeless read.
       recordReapedSession("js-runtime-debugger", UDID, "scoped", { scope: "54321" });
 
-      expect(takeReapedSession("js-runtime-debugger", UDID)).toBeUndefined();
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, undefined, { scopeResolved: true })
+      ).toBeUndefined();
+    });
+
+    it("stays exact for a port the caller named, which cannot have moved", () => {
+      // The second-bundler case. `metroPort` hands back a caller's own port
+      // verbatim, so a miss under it is a different session, not a moved key —
+      // and answering it would give that session a stranger's crash AND spend
+      // the record the rightful reader is waiting for.
+      recordReapedSession("js-runtime-debugger", UDID, "the 8081 crash", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-8081.log",
+        scope: "8081",
+      });
+
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "9000", { scopeResolved: false })
+      ).toBeUndefined();
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: false })?.keptAt
+      ).toBe("/tmp/argent-logs-8081.log");
+    });
+
+    it("stays exact unless a caller opts in, so every other reader is unaffected", () => {
+      // The relaxation is opt-in. Three of the four readers pass no scope at all
+      // and none of them passes this flag, so the default is what they get.
+      recordReapedSession("js-runtime-debugger", UDID, "scoped", { scope: "54321" });
+
+      expect(peekReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+    });
+
+    it("relaxes for peek and take alike, so the registry's pair agrees", () => {
+      // debugger-log-registry peeks before it takes and only takes when the peek
+      // returned something. Relaxing one and not the other makes the peek report
+      // a record the take then fails to spend.
+      recordReapedSession("js-runtime-debugger", UDID, "kept", { scope: "54321" });
+
+      expect(
+        peekReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })?.salvage
+      ).toBe("kept");
+      expect(
+        takeReapedSession("js-runtime-debugger", UDID, "8081", { scopeResolved: true })?.salvage
+      ).toBe("kept");
     });
   });
 

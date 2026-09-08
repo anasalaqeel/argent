@@ -17,7 +17,11 @@ import { networkRequestTool } from "../src/tools/network/network-request";
 import { reactProfilerFiberTreeTool } from "../src/tools/profiler/react/react-profiler-fiber-tree";
 import { reactProfilerRendersTool } from "../src/tools/profiler/react/react-profiler-renders";
 import { forgetDeviceAlias, rememberDeviceAlias } from "../src/utils/debugger/device-alias";
-import { metroPort, publishedMetroPort } from "../src/utils/debugger/metro-port";
+import {
+  metroPort,
+  metroPortWasResolved,
+  publishedMetroPort,
+} from "../src/utils/debugger/metro-port";
 import {
   __resetExternalDeviceCacheForTesting,
   __resetProviderWarningsForTesting,
@@ -263,7 +267,11 @@ describe("debuggerReapedScope agrees with the URN the session is named by", () =
 
     const readerScope = debuggerReapedScope(params);
     expect(readerScope).not.toBe(filedScope);
-    expect(takeReapedSession("js-runtime-debugger", DEVICE_ID, readerScope)?.keptAt).toBe(KEPT_LOG);
+    expect(
+      takeReapedSession("js-runtime-debugger", DEVICE_ID, readerScope, {
+        scopeResolved: metroPortWasResolved(params),
+      })?.keptAt
+    ).toBe(KEPT_LOG);
   });
 });
 

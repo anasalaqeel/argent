@@ -61,6 +61,23 @@ export function metroPort(params: { device_id?: string; port?: number }): number
 }
 
 /**
+ * Whether {@linkcode metroPort} had to RESOLVE this call's port instead of being
+ * handed one.
+ *
+ * A resolved port is read from the provider's descriptor, so two identical calls
+ * can get different answers as the provider withdraws or re-ports the device; a
+ * caller's own port is returned verbatim and cannot move. Readers of the
+ * reaped-session store need that difference. A key built from a resolved port
+ * may no longer be the one the session was filed under, so a miss there is
+ * forgivable; a key built from a named port that misses is a different session,
+ * and answering it with another port's record would hand a healthy session a
+ * stranger's crash.
+ */
+export function metroPortWasResolved(params: { device_id?: string; port?: number }): boolean {
+  return params.port === undefined;
+}
+
+/**
  * The CDP socket a provider wants Argent to attach to, in place of the target
  * Metro advertises. Only the socket comes from the provider: Metro still
  * supplies the session's metadata, so this composes with

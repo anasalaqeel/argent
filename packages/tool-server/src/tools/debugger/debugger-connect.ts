@@ -6,7 +6,7 @@ import {
   debuggerReapedScope,
   debuggerServiceRef,
 } from "./debugger-service-ref";
-import { metroPortField } from "../../utils/debugger/metro-port";
+import { metroPortField, metroPortWasResolved } from "../../utils/debugger/metro-port";
 import { describeReapedSession, takeReapedSession } from "../../utils/reaped-sessions";
 
 const zodSchema = z.object({
@@ -89,7 +89,10 @@ Use when starting a debug session or before calling other debugger-* tools. Fail
     const reaped = takeReapedSession(
       "js-runtime-debugger",
       params.device_id,
-      debuggerReapedScope(params)
+      debuggerReapedScope(params),
+      // Only a scope this call RESOLVED may be forgiven if it has moved. Name a
+      // port and you get that port back, so a miss is another session's record.
+      { scopeResolved: metroPortWasResolved(params) }
     );
     // A teardown record is dropped deliberately: from this connect on the
     // capture is your own, and someone else's stop-all is not this session's

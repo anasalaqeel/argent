@@ -12,6 +12,7 @@ import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-stat
 import { resolveDebuggerService } from "../../src/tools/debugger/not-connected";
 import {
   __resetReapedSessionsForTesting,
+  peekReapedSession,
   recordReapedSession,
 } from "../../src/utils/reaped-sessions";
 import { scopeTempHome } from "../helpers/temp-home";
@@ -254,6 +255,72 @@ describe("console logs across an app crash", () => {
     expect(fs.readFileSync(logPath, "utf-8")).toContain("CRITICAL pre-crash error");
 
     fs.rmSync(logPath, { force: true });
+  });
+
+  /**
+   * Both readers spend the breadcrumb, and both decide whether their key may be
+   * forgiven for having moved. A caller's own port is handed back verbatim, so
+   * these keys cannot have moved: another port's record is a different session,
+   * and taking it would give this one a stranger's crash while orphaning the log
+   * its real reader is waiting for.
+   */
+  describe("a caller that named its own port is answered on that port alone", () => {
+    /** A port nothing in this file listens on, so only the key can match it. */
+    const OTHER_PORT = "59999";
+
+    function fileForeignRecord(deviceId: string): void {
+      __resetReapedSessionsForTesting();
+      recordReapedSession("js-runtime-debugger", [deviceId], "kept", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-other-bundler.log",
+        scope: OTHER_PORT,
+      });
+    }
+
+    it("debugger-log-registry reports no note and leaves the record", async () => {
+      fileForeignRecord("named-port-registry");
+
+      const answer = (await registry.invokeTool("debugger-log-registry", {
+        port: mockPort,
+        device_id: "named-port-registry",
+      })) as { note?: string };
+
+      expect(answer.note).toBeUndefined();
+      expect(
+        peekReapedSession("js-runtime-debugger", "named-port-registry", OTHER_PORT)?.keptAt
+      ).toBe("/tmp/argent-logs-other-bundler.log");
+    });
+
+    it("debugger-log-registry reports no note on the not-connected path either", async () => {
+      // The catch arm takes the breadcrumb directly, without the peek the
+      // success arm does, so it decides the same question on its own.
+      fileForeignRecord("named-port-dead-metro");
+
+      const answer = (await registry.invokeTool("debugger-log-registry", {
+        // Nothing listens here, so the debugger service fails to resolve.
+        port: 59998,
+        device_id: "named-port-dead-metro",
+      })) as { note?: string };
+
+      expect(answer.note).toBeUndefined();
+      expect(
+        peekReapedSession("js-runtime-debugger", "named-port-dead-metro", OTHER_PORT)?.keptAt
+      ).toBe("/tmp/argent-logs-other-bundler.log");
+    });
+
+    it("debugger-connect reports no note and leaves the record", async () => {
+      fileForeignRecord("named-port-connect");
+
+      const answer = (await registry.invokeTool("debugger-connect", {
+        port: mockPort,
+        device_id: "named-port-connect",
+      })) as { note?: string };
+
+      expect(answer.note).toBeUndefined();
+      expect(
+        peekReapedSession("js-runtime-debugger", "named-port-connect", OTHER_PORT)?.keptAt
+      ).toBe("/tmp/argent-logs-other-bundler.log");
+    });
   });
 
   it("points a post-crash reader at the file the crash left behind", async () => {

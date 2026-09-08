@@ -83,6 +83,15 @@ interface ReapedSession {
   /** Keys this event was filed under; later writes narrow what it answers to. */
   filedKeys: readonly string[];
   /**
+   * The device ids behind those keys. Every copy carries all of them, because a
+   * copy's own `deviceId` is only the spelling its reader used: a Metro session
+   * files one under the connect id and one under the opaque `logicalDeviceId`,
+   * and the latter classifies by shape alone. Anything asking what KIND of
+   * device this was has to ask of the whole set, or one teardown answers two
+   * ways depending on which id the reader happened to name.
+   */
+  filedIds: readonly string[];
+  /**
    * The id the runtime itself gave this device — Metro's `logicalDeviceId`, or
    * on Chromium the device id, which is the same thing there. Absent for a
    * legacy inspector (Vega, RN 0.72), which reports none.
@@ -125,10 +134,12 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * Pass every id the device answers to — a debugger session is readable back
  * under the id the caller connected with OR the `logicalDeviceId` Metro echoed,
  * and only the disposer knows both. They file one event, so consuming either
- * spends all of them. Under one `scope`, though, so a reader reaches either id
- * only where it resolves that same scope: a provider publishes its Metro port
- * against the device ids it claims, and a `logicalDeviceId` is not one of them,
- * so on such a device that key answers only to a reader naming the same port.
+ * spends all of them. All under one `scope`, so which port a reader resolves
+ * still decides what it reaches: exactly, or — where the reader says its scope
+ * was resolved rather than named, and the device has a single record — by the
+ * relaxation `lookup` documents. That matters here because a provider publishes
+ * its Metro port against the device ids it claims and a `logicalDeviceId` is
+ * not one of them, so the two ids of one session can resolve different ports.
  *
  * `cause` defaults to `"teardown"`, all a disposer can say when it knows only
  * that `dispose()` ran; pass `"runtime-death"` where it can tell the runtime
@@ -139,12 +150,17 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * omit it for a legacy inspector, which reports none, and its files then wait
  * for the day-old sweep rather than being taken on ids alone.
  *
- * `scope` tells apart two sessions of one kind on one device, and readers must
- * pass the same one. A Metro-backed debugger is per port, each with its own log
- * file, so without the port a session ending on 8082 supersedes the crash
- * breadcrumb from 8081 — and reclaims the file it named, if 8082 crashed too. Omit it where a device
- * holds at most one session of the kind (a recording, a profiler trace), and on
+ * `scope` tells apart two sessions of one kind on one device. A Metro-backed
+ * debugger is per port, each with its own log file, so without the port a
+ * session ending on 8082 supersedes the crash breadcrumb from 8081 — and
+ * reclaims the file it named, if 8082 crashed too. Omit it where a device holds
+ * at most one session of the kind (a recording, a profiler trace), and on
  * Chromium, whose port is already inside the device id.
+ *
+ * It is the WRITE side of the key `lookup` reads, so the two have to be read
+ * together: a reader naming its own port is answered on this scope exactly,
+ * while one whose port was resolved may be answered from the device's only
+ * record, this scope having possibly moved under it since.
  */
 export function recordReapedSession(
   kind: ReapedSessionKind,
@@ -197,6 +213,7 @@ export function recordReapedSession(
   }
   const filedNow: ReapedSession[] = [];
   const filedKeys = [...keys];
+  const filedIds = [...ids];
   for (const deviceId of ids) {
     const entry: ReapedSession = {
       kind,
@@ -205,6 +222,7 @@ export function recordReapedSession(
       atMs: Date.now(),
       cause: opts.cause ?? "teardown",
       filedKeys,
+      filedIds,
     };
     if (salvage) entry.salvage = salvage;
     if (opts.keptAt) entry.keptAt = opts.keptAt;
@@ -299,30 +317,38 @@ export function recordReapedSession(
 }
 
 /**
- * The record for `kind`/`deviceId`: by exact key, then by device alone.
+ * The record for `kind`/`deviceId`: by exact key, then — only when the caller
+ * says its `scope` was RESOLVED rather than given — by device alone.
  *
- * A `scope` is not always the same text at the read as it was at the write. A
- * Metro debugger's is the port the session RESOLVED to, and a provider
+ * A resolved scope is not always the same text at the read as it was at the
+ * write. A Metro debugger's is the port the session resolved to, and a provider
  * publishes that port, so withdrawing or re-porting the device moves what an
  * unchanged call computes. That withdrawal is itself one of the teardowns that
  * files a record here, so the exact key misses the breadcrumb the very same
  * event just left, and the reader answers that nothing was lost while holding
  * the only path to the crash log.
  *
- * Relaxed only where the device has ONE record, and only for a caller that
- * named a scope. The scope is what tells two of a device's sessions apart, so
- * with a second record there is a real question of which was asked for and the
- * exact key is the only honest answer; and a kind that never scopes (a
- * recording, a trace, a Chromium debugger, whose port is in its device id) has
- * no moving text to forgive.
+ * `scopeResolved` is what separates that from a caller naming a genuinely
+ * different session. A caller that passes its own port gets that port back
+ * unchanged — no provider state is read — so a miss there means the session it
+ * asked about left no record, and answering with another port's would hand a
+ * healthy session a stranger's crash and DELETE the record its own reader is
+ * waiting for.
+ *
+ * Relaxed only where the device has ONE record, for the same reason: the scope
+ * is what tells two of a device's sessions apart, so with a second there is a
+ * real question of which was meant. A kind that never scopes (a recording, a
+ * trace, a Chromium debugger, whose port is in its device id) has no moving
+ * text to forgive and never reaches the scan.
  */
 function lookup(
   kind: ReapedSessionKind,
   deviceId: string,
-  scope?: string
+  scope: string | undefined,
+  scopeResolved: boolean
 ): ReapedSession | undefined {
   const exact = reaped.get(key(kind, deviceId, scope));
-  if (exact || scope === undefined) return exact;
+  if (exact || scope === undefined || !scopeResolved) return exact;
 
   const wanted = deviceId.toLowerCase();
   let only: ReapedSession | undefined;
@@ -344,9 +370,10 @@ function lookup(
 export function peekReapedSession(
   kind: ReapedSessionKind,
   deviceId: string,
-  scope?: string
+  scope?: string,
+  opts: { scopeResolved?: boolean } = {}
 ): ReapedSession | undefined {
-  return lookup(kind, deviceId, scope);
+  return lookup(kind, deviceId, scope, opts.scopeResolved ?? false);
 }
 
 /**
@@ -360,9 +387,10 @@ export function peekReapedSession(
 export function takeReapedSession(
   kind: ReapedSessionKind,
   deviceId: string,
-  scope?: string
+  scope?: string,
+  opts: { scopeResolved?: boolean } = {}
 ): ReapedSession | undefined {
-  const entry = lookup(kind, deviceId, scope);
+  const entry = lookup(kind, deviceId, scope, opts.scopeResolved ?? false);
   if (!entry) return undefined;
   for (const [k, sibling] of reaped) {
     if (sibling.event === entry.event) reaped.delete(k);
@@ -496,13 +524,18 @@ export function describeReapedSession(entry: ReapedSession, what: string): strin
   // called. Gated like `otherReacher` above: a descriptor may only claim an `ios`
   // or `android` device, and adoption rejects one whose native id classifies as
   // anything else, so on Chromium, Vega or a remote iOS device this would send
-  // the reader after a grant that cannot exist.
-  const providerReacher =
-    platform === "ios" || platform === "android"
-      ? `a provider changing what it grants for a device it claims, which drops that ` +
-        `device's services on the next call naming it — possibly this one, since the ` +
-        `check runs on dispatch rather than as a call of its own`
-      : undefined;
+  // the reader after a grant that cannot exist. Asked of every id the event was
+  // filed under, not this copy's: a `logicalDeviceId` is an opaque handle that
+  // classifies by shape, and a 40-hex one reads as an Android serial, so on a
+  // remote iOS device the two copies would answer differently.
+  const providerReacher = entry.filedIds.every((id) => {
+    const of = classifyDevice(id);
+    return of === "ios" || of === "android";
+  })
+    ? `a provider changing what it grants for a device it claims, which drops that ` +
+      `device's services on the next call naming it — possibly this one, since the ` +
+      `check runs on dispatch rather than as a call of its own`
+    : undefined;
   const why =
     entry.cause === "runtime-death"
       ? runtimeDeath

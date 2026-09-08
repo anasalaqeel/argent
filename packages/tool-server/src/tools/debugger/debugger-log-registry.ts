@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { Registry, ToolDefinition } from "@argent/registry";
 import type { LogStats, MessageCluster } from "../../utils/debugger/log-file-writer";
 import { DEBUGGER_TOOL_CAPABILITY, debuggerReapedScope } from "./debugger-service-ref";
-import { metroPortField } from "../../utils/debugger/metro-port";
+import { metroPortField, metroPortWasResolved } from "../../utils/debugger/metro-port";
 import {
   describeReapedSession,
   peekReapedSession,
@@ -58,8 +58,12 @@ interface LogRegistryResponse extends LogStats {
  * can belong to a different device, whose breadcrumb this read would then
  * consume and report as its own.
  */
-function takeReapedNote(deviceId: string, scope?: string): string | undefined {
-  const entry = takeReapedSession("js-runtime-debugger", deviceId, scope);
+function takeReapedNote(
+  deviceId: string,
+  scope: string | undefined,
+  scopeResolved: boolean
+): string | undefined {
+  const entry = takeReapedSession("js-runtime-debugger", deviceId, scope, { scopeResolved });
   return entry ? describeReapedSession(entry, "JS-runtime debugger session") : undefined;
 }
 
@@ -134,11 +138,16 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         // returns ordinary success included. Looked at before it is spent, so
         // the only records this answer destroys are the ones it reports.
         const scope = debuggerReapedScope(params);
-        const pending = peekReapedSession("js-runtime-debugger", params.device_id, scope);
+        // One value for both reads: they have to agree on which record is being
+        // looked at, or the peek reports one the take then fails to spend.
+        const scopeResolved = metroPortWasResolved(params);
+        const pending = peekReapedSession("js-runtime-debugger", params.device_id, scope, {
+          scopeResolved,
+        });
         const empty = stats.totalEntries === 0;
         const reaped =
           pending && (empty || pending.keptAt !== undefined || pending.superseded)
-            ? takeReapedNote(params.device_id, scope)
+            ? takeReapedNote(params.device_id, scope, scopeResolved)
             : undefined;
         // Both can be true at once — an unwritable directory outlives the
         // session that died in it — and they are about different files, the old
@@ -202,7 +211,9 @@ When the debugger cannot be reached, this tool does not fail: it returns { statu
         // ask again. The asking again is what would find it spent.
         const withheld = reason === "reconnecting";
         const scope = debuggerReapedScope(params);
-        const note = withheld ? undefined : takeReapedNote(params.device_id, scope);
+        const note = withheld
+          ? undefined
+          : takeReapedNote(params.device_id, scope, metroPortWasResolved(params));
         const result = buildNotConnected(reason, err, params, { reportsOwnNote: true });
         // `guidance` is the field an agent acts on, and these strings are
         // written for `debugger-status`, which carries no note: one that names a
