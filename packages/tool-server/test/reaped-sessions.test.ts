@@ -98,6 +98,24 @@ describe("the reaped-session key", () => {
     expect(message).not.toMatch(/torn down \d+s ago by a stop-all-simulator-servers/);
   });
 
+  it("names the reacher that is not a tool at all", () => {
+    // A provider narrowing what it grants makes the next dispatch naming that
+    // device run disposeExternalDeviceServices, which reaps every service whose
+    // URN payload names it — this session included, against a live socket, so it
+    // files a teardown. No tool ran, and the reason reaches stderr only, so a
+    // list of tools alone sends the reader after a call nobody made.
+    recordReapedSession("js-runtime-debugger", UDID);
+
+    const message = describeReapedSession(
+      takeReapedSession("js-runtime-debugger", UDID)!,
+      "JS-runtime debugger session"
+    );
+    expect(message).toContain("a provider changing what it grants");
+    // And the sentence that follows no longer offers "another agent" as the
+    // account of every teardown in the list: this one had no caller.
+    expect(message).toContain("a tool teardown may have been another agent");
+  });
+
   it("names the crash instead of the teardown family when the runtime died", () => {
     // The one cause a disposer can actually identify. Offering the teardown
     // family here — "a stop-all-simulator-servers … this may have been another
@@ -196,7 +214,9 @@ describe("the reaped-session key", () => {
       takeReapedSession("screen-recording", UDID)!,
       "screen recording"
     );
-    expect(message).toContain("reaps every service a device owns. One tool-server");
+    // No TOOL clause between the two: the provider reacher that follows is not
+    // one, and applies to a recording as much as to a debugger session.
+    expect(message).toContain("a device owns, or by a provider changing what it grants");
     expect(message).not.toContain("react-profiler-start");
     expect(message).not.toContain("a stop-simulator-server");
   });
@@ -210,7 +230,7 @@ describe("the reaped-session key", () => {
       takeReapedSession("js-runtime-debugger", "amazon-4a27df03c9777152")!,
       "JS-runtime debugger session"
     );
-    expect(message).toContain("reaps every service a device owns. One tool-server");
+    expect(message).toContain("a device owns, or by a provider changing what it grants");
     expect(message).not.toContain("react-profiler-start");
   });
 

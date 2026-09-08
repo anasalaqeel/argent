@@ -125,7 +125,10 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * Pass every id the device answers to — a debugger session is readable back
  * under the id the caller connected with OR the `logicalDeviceId` Metro echoed,
  * and only the disposer knows both. They file one event, so consuming either
- * spends all of them.
+ * spends all of them. Under one `scope`, though, so a reader reaches either id
+ * only where it resolves that same scope: a provider publishes its Metro port
+ * against the device ids it claims, and a `logicalDeviceId` is not one of them,
+ * so on such a device that key answers only to a reader naming the same port.
  *
  * `cause` defaults to `"teardown"`, all a disposer can say when it knows only
  * that `dispose()` ran; pass `"runtime-death"` where it can tell the runtime
@@ -448,13 +451,21 @@ export function describeReapedSession(entry: ReapedSession, what: string): strin
           ? undefined
           : `a react-profiler-start, which disposes the debugger session along with its own ` +
             `whenever either is in a state it cannot reuse`;
+  // Not a tool, and so not in the list above: a provider narrowing or dropping
+  // what it grants for a device it claims makes the next dispatch naming that
+  // device reap every service cached for it, this session included. No call ran,
+  // and `enforceExternalDeviceGrant` writes the reason to stderr alone — so
+  // without this clause the note offers only tools, one of which the reader is
+  // then left to assume another agent called.
   const why =
     entry.cause === "runtime-death"
       ? runtimeDeath
       : `by a stop-all-simulator-servers, which reaps every service a device owns` +
         (otherReacher ? `, or by ${otherReacher}` : ``) +
-        `. One tool-server serves every agent using this argent install, so this may have been ` +
-        `another agent rather than your own call.`;
+        `, or by a provider changing what it grants for a device it claims, which drops that ` +
+        `device's services without any tool call. One tool-server serves every agent using ` +
+        `this argent install, so a tool teardown may have been another agent rather than your ` +
+        `own call.`;
   // The salvage clause was written when the file was there; a breadcrumb nobody
   // read can outlive it, so correct the promise rather than name a reclaimed path.
   const salvage =
