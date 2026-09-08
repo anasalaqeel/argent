@@ -221,17 +221,89 @@ describe("the reaped-session key", () => {
     expect(message).not.toContain("a stop-simulator-server");
   });
 
-  it("names no react-profiler-start to a Vega debugger session", () => {
+  it("names neither reacher to a Vega debugger session", () => {
     // The debugger runs on Vega — DEBUGGER_TOOL_CAPABILITY declares vega.vvd —
     // while RN_ONLY_TOOL_CAPABILITY, which gates react-profiler-start, does not.
+    // Nor can a provider be the one that did it: a descriptor claims only `ios`
+    // and `android` devices, so naming either reacher here sends the reader
+    // after a call and a grant that cannot exist. The list is empty, and the
+    // sentence has to read as one.
     recordReapedSession("js-runtime-debugger", "amazon-4a27df03c9777152", "");
 
     const message = describeReapedSession(
       takeReapedSession("js-runtime-debugger", "amazon-4a27df03c9777152")!,
       "JS-runtime debugger session"
     );
-    expect(message).toContain("a device owns, or by a provider changing what it grants");
+    expect(message).toContain("reaps every service a device owns. One tool-server");
     expect(message).not.toContain("react-profiler-start");
+    expect(message).not.toContain("a provider changing what it grants");
+  });
+
+  it("names the provider reacher only where a provider could have claimed the device", () => {
+    // The clause's gate, both ways. A descriptor's devices are `ios` or
+    // `android` and adoption rejects one whose native id classifies as anything
+    // else, so a Chromium session's grant cannot exist while an Android
+    // emulator's can — and that one is reached by no tool call of its own,
+    // which is the whole reason the clause is there.
+    recordReapedSession("js-runtime-debugger", "emulator-5554", "");
+    expect(
+      describeReapedSession(
+        takeReapedSession("js-runtime-debugger", "emulator-5554")!,
+        "JS-runtime debugger session"
+      )
+    ).toContain("a provider changing what it grants");
+
+    recordReapedSession("js-runtime-debugger", "chromium-cdp-9222", "");
+    expect(
+      describeReapedSession(
+        takeReapedSession("js-runtime-debugger", "chromium-cdp-9222")!,
+        "JS-runtime debugger session"
+      )
+    ).not.toContain("a provider changing what it grants");
+  });
+
+  /**
+   * A `scope` is the port the session RESOLVED to, and a provider publishes
+   * that port, so it is not guaranteed to still read the same at the read —
+   * see `lookup`. These pin the relaxation and, just as much, its limits.
+   */
+  describe("a scope that moved between the write and the read", () => {
+    it("still reaches the device's only record", () => {
+      recordReapedSession("js-runtime-debugger", UDID, "kept", {
+        cause: "runtime-death",
+        keptAt: "/tmp/argent-logs-1-2-3-4.log",
+        scope: "54321",
+      });
+
+      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")?.keptAt).toBe(
+        "/tmp/argent-logs-1-2-3-4.log"
+      );
+    });
+
+    it("refuses to guess between two of a device's sessions", () => {
+      // What the scope is FOR. With two records the reader's port is the only
+      // thing that says which was asked for, so a miss stays a miss.
+      recordReapedSession("js-runtime-debugger", UDID, "on 8082", { scope: "8082" });
+      recordReapedSession("js-runtime-debugger", UDID, "on 9000", { scope: "9000" });
+
+      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+      expect(takeReapedSession("js-runtime-debugger", UDID, "9000")?.salvage).toBe("on 9000");
+    });
+
+    it("does not reach across devices, or across kinds", () => {
+      recordReapedSession("js-runtime-debugger", "other-device", "theirs", { scope: "54321" });
+      recordReapedSession("screen-recording", UDID, "a recording", { scope: "54321" });
+
+      expect(takeReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
+    });
+
+    it("stays exact for a reader that names no scope", () => {
+      // A kind that never scopes has no moving text to forgive, so a record
+      // filed under one must not answer a scopeless read.
+      recordReapedSession("js-runtime-debugger", UDID, "scoped", { scope: "54321" });
+
+      expect(takeReapedSession("js-runtime-debugger", UDID)).toBeUndefined();
+    });
   });
 
   it("spends every copy of one teardown, whichever id the reader knows", () => {

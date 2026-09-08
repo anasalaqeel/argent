@@ -23,6 +23,11 @@ import {
   __resetProviderWarningsForTesting,
   makeExternalId,
 } from "../src/utils/external-devices";
+import {
+  __resetReapedSessionsForTesting,
+  recordReapedSession,
+  takeReapedSession,
+} from "../src/utils/reaped-sessions";
 
 /**
  * A provider running several projects gives each a free port, so an agent
@@ -40,19 +45,20 @@ const UNCLAIMED_SERIAL = "emulator-5556";
 const PROVIDER_ID = "acme-3f2a9c";
 const PROVIDER_METRO_PORT = 54321;
 const DEVICE_ID = makeExternalId(PROVIDER_ID, ANDROID_SERIAL);
+const KEPT_LOG = "/tmp/argent-logs-1-2-3-4.log";
 
 let temporaryDirectory: string;
 
 /**
  * Publish a descriptor whose device declares `metroPort` unless told not to.
  */
-function publishDescriptor(options: { metroPort?: number } = {}): void {
+function publishDescriptor(options: { metroPort?: number; devices?: unknown[] } = {}): void {
   const descriptorPath = path.join(temporaryDirectory, "acme.json");
 
   fs.writeFileSync(
     descriptorPath,
     JSON.stringify({
-      devices: [
+      devices: options.devices ?? [
         {
           capabilities: ["adb", "js-debugger"],
           kind: "emulator",
@@ -70,6 +76,7 @@ function publishDescriptor(options: { metroPort?: number } = {}): void {
   );
 
   process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
+  __resetExternalDeviceCacheForTesting();
 }
 
 beforeEach(() => {
@@ -77,6 +84,7 @@ beforeEach(() => {
   delete process.env.ARGENT_DISABLE_DEVICE_PROVIDERS;
   __resetExternalDeviceCacheForTesting();
   __resetProviderWarningsForTesting();
+  __resetReapedSessionsForTesting();
   publishDescriptor({ metroPort: PROVIDER_METRO_PORT });
 });
 
@@ -231,6 +239,32 @@ describe("debuggerReapedScope agrees with the URN the session is named by", () =
   /** Chromium carries its CDP port inside the device id, so it stays unscoped. */
   it("leaves a Chromium session unscoped", () => {
     expect(debuggerReapedScope({ device_id: "chromium-cdp-9222" })).toBeUndefined();
+  });
+
+  /**
+   * The agreement above holds at one instant. The scope is resolved, not
+   * remembered, so the provider withdrawing the device moves what an unchanged
+   * call computes — and that withdrawal is itself one of the teardowns that
+   * files a breadcrumb, so the read that misses is the one chasing the crash it
+   * caused. Losing it would have the registry report no session was lost while
+   * holding the only path to the pre-crash log.
+   */
+  it("still reaches the breadcrumb after the provider drops the device", () => {
+    const params = { device_id: DEVICE_ID };
+    const filedScope = debuggerReapedScope(params);
+    expect(filedScope).toBe(urnPort(params));
+
+    recordReapedSession("js-runtime-debugger", [DEVICE_ID], "kept", {
+      cause: "runtime-death",
+      keptAt: KEPT_LOG,
+      scope: filedScope,
+    });
+
+    publishDescriptor({ devices: [] });
+
+    const readerScope = debuggerReapedScope(params);
+    expect(readerScope).not.toBe(filedScope);
+    expect(takeReapedSession("js-runtime-debugger", DEVICE_ID, readerScope)?.keptAt).toBe(KEPT_LOG);
   });
 });
 

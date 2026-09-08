@@ -299,6 +299,42 @@ export function recordReapedSession(
 }
 
 /**
+ * The record for `kind`/`deviceId`: by exact key, then by device alone.
+ *
+ * A `scope` is not always the same text at the read as it was at the write. A
+ * Metro debugger's is the port the session RESOLVED to, and a provider
+ * publishes that port, so withdrawing or re-porting the device moves what an
+ * unchanged call computes. That withdrawal is itself one of the teardowns that
+ * files a record here, so the exact key misses the breadcrumb the very same
+ * event just left, and the reader answers that nothing was lost while holding
+ * the only path to the crash log.
+ *
+ * Relaxed only where the device has ONE record, and only for a caller that
+ * named a scope. The scope is what tells two of a device's sessions apart, so
+ * with a second record there is a real question of which was asked for and the
+ * exact key is the only honest answer; and a kind that never scopes (a
+ * recording, a trace, a Chromium debugger, whose port is in its device id) has
+ * no moving text to forgive.
+ */
+function lookup(
+  kind: ReapedSessionKind,
+  deviceId: string,
+  scope?: string
+): ReapedSession | undefined {
+  const exact = reaped.get(key(kind, deviceId, scope));
+  if (exact || scope === undefined) return exact;
+
+  const wanted = deviceId.toLowerCase();
+  let only: ReapedSession | undefined;
+  for (const entry of reaped.values()) {
+    if (entry.kind !== kind || entry.deviceId.toLowerCase() !== wanted) continue;
+    if (only) return undefined;
+    only = entry;
+  }
+  return only;
+}
+
+/**
  * Look at the record without spending it, so a reader can decide whether it is
  * one it should report before it destroys the only copy. `debugger-log-registry`
  * needs this: a record whose account of a lost session lives nowhere else has to
@@ -310,7 +346,7 @@ export function peekReapedSession(
   deviceId: string,
   scope?: string
 ): ReapedSession | undefined {
-  return reaped.get(key(kind, deviceId, scope));
+  return lookup(kind, deviceId, scope);
 }
 
 /**
@@ -326,7 +362,7 @@ export function takeReapedSession(
   deviceId: string,
   scope?: string
 ): ReapedSession | undefined {
-  const entry = reaped.get(key(kind, deviceId, scope));
+  const entry = lookup(kind, deviceId, scope);
   if (!entry) return undefined;
   for (const [k, sibling] of reaped) {
     if (sibling.event === entry.event) reaped.delete(k);
@@ -419,7 +455,8 @@ function describeReplacedRecords(entry: ReapedSession): string {
  */
 export function describeReapedSession(entry: ReapedSession, what: string): string {
   const secondsAgo = Math.max(0, Math.round((Date.now() - entry.atMs) / 1000));
-  const isChromium = classifyDevice(entry.deviceId) === "chromium";
+  const platform = classifyDevice(entry.deviceId);
+  const isChromium = platform === "chromium";
   // Worded for a debugger session, the only kind that files a `runtime-death`:
   // a recording and a trace report their own end. A kind that starts filing one
   // needs wording of its own, the way the file clause above does.
@@ -447,25 +484,33 @@ export function describeReapedSession(entry: ReapedSession, what: string): strin
       : isChromium
         ? `a stop-simulator-server, or a flow-run reclaiming an Electron app it booted, either ` +
           `of which cascades into the debugger through the Chromium CDP session it reaps`
-        : classifyDevice(entry.deviceId) === "vega"
+        : platform === "vega"
           ? undefined
           : `a react-profiler-start, which disposes the debugger session along with its own ` +
             `whenever either is in a state it cannot reuse`;
   // Not a tool, and so not in the list above: a provider narrowing or dropping
-  // what it grants for a device it claims makes the next dispatch naming that
-  // device reap every service cached for it, this session included. No call ran,
-  // and `enforceExternalDeviceGrant` writes the reason to stderr alone — so
-  // without this clause the note offers only tools, one of which the reader is
-  // then left to assume another agent called.
+  // what it grants for a device it claims reaps every service cached for it, this
+  // session included. Nothing else would name it — `enforceExternalDeviceGrant`
+  // writes the reason to stderr alone — so without this clause the note offers
+  // only tools, one of which the reader is then left to assume another agent
+  // called. Gated like `otherReacher` above: a descriptor may only claim an `ios`
+  // or `android` device, and adoption rejects one whose native id classifies as
+  // anything else, so on Chromium, Vega or a remote iOS device this would send
+  // the reader after a grant that cannot exist.
+  const providerReacher =
+    platform === "ios" || platform === "android"
+      ? `a provider changing what it grants for a device it claims, which drops that ` +
+        `device's services on the next call naming it — possibly this one, since the ` +
+        `check runs on dispatch rather than as a call of its own`
+      : undefined;
   const why =
     entry.cause === "runtime-death"
       ? runtimeDeath
       : `by a stop-all-simulator-servers, which reaps every service a device owns` +
         (otherReacher ? `, or by ${otherReacher}` : ``) +
-        `, or by a provider changing what it grants for a device it claims, which drops that ` +
-        `device's services without any tool call. One tool-server serves every agent using ` +
-        `this argent install, so a tool teardown may have been another agent rather than your ` +
-        `own call.`;
+        (providerReacher ? `, or by ${providerReacher}` : ``) +
+        `. One tool-server serves every agent using this argent install, so a tool teardown ` +
+        `may have been another agent rather than your own call.`;
   // The salvage clause was written when the file was there; a breadcrumb nobody
   // read can outlive it, so correct the promise rather than name a reclaimed path.
   const salvage =
