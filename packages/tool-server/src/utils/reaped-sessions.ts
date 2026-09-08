@@ -101,12 +101,13 @@ interface ReapedSession {
   logicalId?: string;
   cause: ReapedSessionCause;
   /**
-   * Whether this record's `scope` came from a port a provider PUBLISHED, the
-   * only port that can read back differently later. Without it the store cannot
-   * tell a key that moved from one naming a genuinely different session, and a
-   * reader on the resolved port would take a second bundler's crash.
+   * Whether this record's `scope` was the port a call naming none resolved for
+   * the device — the only kind that can read back as a different port later.
+   * Without it the store cannot tell a key that moved from one naming a
+   * genuinely different session, and a reader on the resolved port would take a
+   * second bundler's crash.
    */
-  scopeFromProvider?: boolean;
+  scopeWasResolved?: boolean;
   /**
    * What survived, as a ready-to-read clause (e.g. naming a salvaged file), or
    * undefined when nothing did. Built by the disposer, which is the only place
@@ -157,11 +158,12 @@ function key(kind: ReapedSessionKind, deviceId: string, scope?: string): string 
  * omit it for a legacy inspector, which reports none, and its files then wait
  * for the day-old sweep rather than being taken on ids alone.
  *
- * `scopeFromProvider` says that `scope` is a port the device's provider
- * published rather than one a caller named. Only that kind can read back as a
- * different port later, so it is what lets `lookup` forgive a key that moved.
- * Ask it while the claim is live — the withdrawal that ends the session also
- * takes the descriptor the port came from.
+ * `scopeWasResolved` says that `scope` is the port a call naming none resolves
+ * for this device. Only that port can read back as a different one later, so it
+ * is what lets `lookup` forgive a key that moved — and it turns on the port,
+ * not on who supplied it: naming the port resolution would have picked lands on
+ * the same session. Ask it while the claim is live, since the withdrawal that
+ * ends the session also takes the descriptor the answer depends on.
  *
  * `scope` tells apart two sessions of one kind on one device. A Metro-backed
  * debugger is per port, each with its own log file, so without the port a
@@ -183,7 +185,7 @@ export function recordReapedSession(
     cause?: ReapedSessionCause;
     keptAt?: string;
     scope?: string;
-    scopeFromProvider?: boolean;
+    scopeWasResolved?: boolean;
     logicalId?: string;
   } = {}
 ): void {
@@ -238,7 +240,7 @@ export function recordReapedSession(
       filedKeys,
       filedIds,
     };
-    if (opts.scopeFromProvider) entry.scopeFromProvider = true;
+    if (opts.scopeWasResolved) entry.scopeWasResolved = true;
     if (salvage) entry.salvage = salvage;
     if (opts.keptAt) entry.keptAt = opts.keptAt;
     if (opts.logicalId) entry.logicalId = opts.logicalId;
@@ -345,11 +347,12 @@ export function recordReapedSession(
  *
  * It takes BOTH sides saying so. `scopeResolved` is the reader's half: a caller
  * that passes its own port gets that port back unchanged, so a miss there means
- * the session it asked about left no record. {@link ReapedSession.scopeFromProvider}
- * is the writer's half, and is just as necessary — a record filed under a port
- * its own caller named is another session on the same device, whatever the
- * reader did. Answering either from the other's record would hand a healthy
- * session a stranger's crash and DELETE the record its own reader is waiting for.
+ * the session it asked about left no record.
+ * {@link ReapedSession.scopeWasResolved} is the writer's half, and is just as
+ * necessary — a record filed on a port resolution would not have picked is a
+ * different session on the same device, whatever the reader did. Answering
+ * either from the other's record would hand a healthy session a stranger's
+ * crash and DELETE the record its own reader is waiting for.
  *
  * Relaxed only where the device has ONE record, for the same reason: the scope
  * is what tells two of a device's sessions apart, so with a second there is a
@@ -376,7 +379,7 @@ function lookup(
   // Both sides of the key have to be movable. A reader on a resolved port asks
   // this of a record filed under a port the writer was GIVEN, and that one is
   // simply another session on the same device.
-  return only?.scopeFromProvider ? only : undefined;
+  return only?.scopeWasResolved ? only : undefined;
 }
 
 /**

@@ -260,9 +260,17 @@ describe("console logs across an app crash", () => {
   /** A device a descriptor claims, so omitting `port` resolves the provider's. */
   const PROVIDER_DEVICE = "ext:acme:emulator-5554";
 
+  /** Descriptors this block wrote, removed however its cases end. */
+  const descriptorFiles: string[] = [];
+
+  afterAll(() => {
+    for (const file of descriptorFiles) fs.rmSync(file, { force: true });
+  });
+
   /** Publish a descriptor putting this provider's Metro on `port`. */
   function publishProviderDescriptor(port: number, nativeId = "emulator-5554"): void {
     const file = path.join(os.tmpdir(), `argent-crash-provider-${process.pid}.json`);
+    descriptorFiles.push(file);
     fs.writeFileSync(
       file,
       JSON.stringify({
@@ -331,7 +339,7 @@ describe("console logs across an app crash", () => {
         cause: "runtime-death",
         keptAt: "/tmp/argent-logs-provider-port.log",
         scope: OTHER_PORT,
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       const answer = (await registry.invokeTool("debugger-log-registry", {
@@ -350,7 +358,7 @@ describe("console logs across an app crash", () => {
         cause: "runtime-death",
         keptAt: "/tmp/argent-logs-provider-port.log",
         scope: OTHER_PORT,
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       const viaRegistry = (await registry.invokeTool("debugger-log-registry", {
@@ -381,7 +389,7 @@ describe("console logs across an app crash", () => {
           cause: "runtime-death",
           keptAt: "/tmp/argent-logs-provider-port.log",
           scope: OTHER_PORT,
-          scopeFromProvider: true,
+          scopeWasResolved: true,
         });
 
         const answer = (await registry.invokeTool("debugger-log-registry", {
@@ -404,7 +412,7 @@ describe("console logs across an app crash", () => {
           cause: "runtime-death",
           keptAt: "/tmp/argent-logs-provider-port.log",
           scope: OTHER_PORT,
-          scopeFromProvider: true,
+          scopeWasResolved: true,
         });
 
         const answer = (await registry.invokeTool("debugger-connect", {
@@ -457,7 +465,7 @@ describe("console logs across an app crash", () => {
         // A device of its own: `debugger-connect` hands back an existing session
         // rather than opening a socket, and this case needs a fresh one.
         expect(
-          (await crashAndPeek({ device_id: "ext:acme:emulator-5599" }))?.scopeFromProvider
+          (await crashAndPeek({ device_id: "ext:acme:emulator-5599" }))?.scopeWasResolved
         ).toBe(true);
       } finally {
         delete process.env.ARGENT_DEVICE_PROVIDERS;
@@ -467,7 +475,7 @@ describe("console logs across an app crash", () => {
       // Same port, but named by the caller on a device no descriptor claims, so
       // nothing about it can move.
       expect(
-        (await crashAndPeek({ device_id: "own-port-device", port: mockPort }))?.scopeFromProvider
+        (await crashAndPeek({ device_id: "own-port-device", port: mockPort }))?.scopeWasResolved
       ).toBeUndefined();
     });
 
@@ -479,7 +487,7 @@ describe("console logs across an app crash", () => {
         cause: "runtime-death",
         keptAt: "/tmp/argent-logs-provider-port.log",
         scope: OTHER_PORT,
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       const answer = (await registry.invokeTool("debugger-log-registry", {
@@ -491,6 +499,52 @@ describe("console logs across an app crash", () => {
       expect(
         peekReapedSession("js-runtime-debugger", "named-dead-metro-provider", OTHER_PORT)?.keptAt
       ).toBe("/tmp/argent-logs-provider-port.log");
+    });
+
+    it("answers for the descriptor the session connected under, not the one at dispose", async () => {
+      // The withdrawal that ends a session takes the descriptor with it, so a
+      // dispose-time read would answer for a resolution that never ran and file
+      // every provider-backed crash as unmovable — losing exactly the note this
+      // whole change exists to deliver.
+      __resetReapedSessionsForTesting();
+      publishProviderDescriptor(mockPort, "emulator-5588");
+      const device = "ext:acme:emulator-5588";
+      try {
+        await registry.invokeTool("debugger-connect", { device_id: device });
+        cdpConn!.send(
+          JSON.stringify({
+            method: "Runtime.consoleAPICalled",
+            params: {
+              type: "error",
+              args: [{ type: "string", value: "pre-crash" }],
+              executionContextId: 1,
+              timestamp: Date.now(),
+            },
+          })
+        );
+        await new Promise((r) => setTimeout(r, 200));
+
+        // The provider drops the device, and only then does the runtime go. The
+        // dispose that files the record therefore runs with the descriptor
+        // already gone, which is the ordering a withdrawal actually produces.
+        publishProviderDescriptor(mockPort, "emulator-5599");
+        cdpConn!.terminate();
+        await new Promise((r) => setTimeout(r, 500));
+
+        // The withdrawal is what reaps the session, and it fails the dispatch
+        // that trips it — which is the production path, and why the descriptor
+        // is already gone by the time the dispose runs.
+        await expect(
+          registry.invokeTool("debugger-status", { port: mockPort, device_id: device })
+        ).rejects.toThrow(/no longer offering/);
+
+        expect(
+          peekReapedSession("js-runtime-debugger", device, String(mockPort))?.scopeWasResolved
+        ).toBe(true);
+      } finally {
+        delete process.env.ARGENT_DEVICE_PROVIDERS;
+        process.env.ARGENT_DISABLE_DEVICE_PROVIDERS = "1";
+      }
     });
 
     it("debugger-log-registry reports no note on the not-connected path either", async () => {

@@ -78,16 +78,23 @@ export function metroPortWasResolved(params: { device_id?: string; port?: number
 }
 
 /**
- * Whether `port` is the one this device's provider publishes — which is what
- * makes it the only kind of port a later, identical call can resolve
- * DIFFERENTLY for the same device.
+ * Whether `port` is the one a call naming no port resolves for this device — so
+ * a session on it is the session such a call addresses, and a later one may
+ * address it by a different port.
+ *
+ * Not the same question as who supplied the port. A caller that names the port
+ * resolution would have picked anyway is on that same session, while one that
+ * omits it on a device no descriptor claims still holds a port that moves the
+ * moment a provider claims it. Both are what the answer turns on, and neither
+ * follows from `params.port` being set.
  *
  * Ask while the claim is live, at connect. A provider withdrawing the device is
  * itself one of the things that ends a session, so by the time that session's
- * dispose runs the descriptor it was resolved from may already be gone.
+ * dispose runs the descriptor the port came from may already be gone — and this
+ * would then answer for a resolution nothing ran.
  */
-export function isPublishedMetroPort(deviceId: string, port: number): boolean {
-  return externalClaimForAnyId(deviceId)?.metroPort === port;
+export function isResolvedMetroPort(deviceId: string, port: number): boolean {
+  return metroPort({ device_id: deviceId }) === port;
 }
 
 /**

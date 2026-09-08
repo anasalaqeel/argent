@@ -298,7 +298,7 @@ describe("the reaped-session key", () => {
         cause: "runtime-death",
         keptAt: "/tmp/argent-logs-1-2-3-4.log",
         scope: "54321",
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       expect(
@@ -311,11 +311,11 @@ describe("the reaped-session key", () => {
       // thing that says which was asked for, so a miss stays a miss.
       recordReapedSession("js-runtime-debugger", UDID, "on 8082", {
         scope: "8082",
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
       recordReapedSession("js-runtime-debugger", UDID, "on 9000", {
         scope: "9000",
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       expect(
@@ -388,7 +388,7 @@ describe("the reaped-session key", () => {
       // Filed as movable, so the reader's default is the only thing refusing it.
       recordReapedSession("js-runtime-debugger", UDID, "scoped", {
         scope: "54321",
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       expect(peekReapedSession("js-runtime-debugger", UDID, "8081")).toBeUndefined();
@@ -401,7 +401,7 @@ describe("the reaped-session key", () => {
       // a record the take then fails to spend.
       recordReapedSession("js-runtime-debugger", UDID, "kept", {
         scope: "54321",
-        scopeFromProvider: true,
+        scopeWasResolved: true,
       });
 
       expect(

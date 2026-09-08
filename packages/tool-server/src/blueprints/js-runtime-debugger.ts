@@ -9,7 +9,7 @@ import {
 import { discoverMetro } from "../utils/debugger/discovery";
 import {
   externalJsDebuggerUrl,
-  isPublishedMetroPort,
+  isResolvedMetroPort,
   publishedMetroPort,
 } from "../utils/debugger/metro-port";
 import { classifyDevice } from "../utils/device-info";
@@ -203,10 +203,11 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
     }
 
     // Read here, not at dispose: a provider dropping this device is one of the
-    // things that ends the session, and it takes the descriptor with it. Tells
-    // the breadcrumb's readers whether this port is one a later call could
-    // resolve differently.
-    const scopeFromProvider = isPublishedMetroPort(deviceId, port);
+    // things that ends the session, and it takes with it the descriptor this
+    // answer turns on. Tells the breadcrumb's readers whether this session is
+    // the one a call naming no port addresses, and so whether a later such call
+    // may address it by a different port.
+    const scopeWasResolved = isResolvedMetroPort(deviceId, port);
 
     /**
      * Mechanism gate for provider-supplied devices. Every tool that speaks CDP
@@ -462,7 +463,7 @@ export const jsRuntimeDebuggerBlueprint: ServiceBlueprint<JsRuntimeDebuggerApi, 
             // its own log file; without the port that one's death would reclaim
             // this file, and its teardown would replace the record naming it.
             scope: portKey,
-            scopeFromProvider,
+            scopeWasResolved,
           });
         }
         forgetDeviceAlias(api.logicalDeviceId);
