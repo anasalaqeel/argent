@@ -1045,6 +1045,90 @@ describe("flowRunToMcpContent", () => {
     expect(joined).toContain(`\`out\` was not written`);
   });
 
+  // `argent link` points this client at an arbitrary tool-server with no version
+  // negotiation. One too old to raise the warning still echoes `out` back in the
+  // step's args, so the client has to say it itself or the agent gets a green
+  // step, a scratch `Saved:` path, and a stale PNG at `out`.
+  it("says `out` went unwritten when the tool-server sent no warning", async () => {
+    const victim = join(root, "victim.png");
+    await fs.writeFile(victim, "stale baseline");
+    const input: FlowExecuteResult = {
+      flow: "skew",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: victim },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain("`out` was not written");
+    expect(joined).toContain(victim);
+    expect(await fs.readFile(victim, "utf8")).toBe("stale baseline");
+  });
+
+  it("defers to the runner's own warning rather than saying it twice", async () => {
+    const input: FlowExecuteResult = {
+      flow: "skew",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1", out: join(root, "v.png") },
+          warning: "the runner's own wording",
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    const joined = blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n");
+    expect(joined).toContain("the runner's own wording");
+    expect(joined).not.toContain("`out` was not written");
+  });
+
+  it("says nothing about `out` on a step that carried none", async () => {
+    const input: FlowExecuteResult = {
+      flow: "plain",
+      steps: [
+        {
+          index: 0,
+          kind: "tool",
+          status: "pass",
+          tool: "screenshot",
+          outputHint: "image",
+          args: { udid: "DEV-1" },
+          result: { image: artifactHandle("img1", "shot.png", "image/png") },
+        },
+      ],
+    };
+    const blocks = await flowRunToMcpContent(input, {
+      toolsUrl: "http://remote:3001",
+      deviceId: "DEV-1",
+      fetchImpl: fetchReturning([...PNG_SIGNATURE, 0x42]),
+    });
+
+    expect(blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n")).not.toContain("⚠");
+  });
+
   it("numbers steps sequentially", async () => {
     const input: FlowExecuteResult = {
       flow: "num",

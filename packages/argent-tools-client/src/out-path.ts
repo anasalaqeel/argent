@@ -1,8 +1,8 @@
 /** Resolve and write a caller's `out` path, on the client that keeps the file. */
 
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 
 /** An absolute path to write to, or the reason the request cannot be honored. */
 export type OutPathResolution = { path: string } | { refusal: string };
@@ -55,6 +55,41 @@ export function resolveOutPath(out: string): OutPathResolution {
 }
 
 /**
+ * What already sits at `target`, in the words of a refusal — or null when the
+ * write may go ahead.
+ *
+ * Only a regular file is replaceable, because `rename` does not follow symlinks
+ * and does not care what it unlinks: pointing `out` at a symlink to a directory
+ * would destroy the link and report a save. Checked here rather than left to
+ * `rename`'s errno, which names the `.part` sibling the caller never mentioned
+ * (`EROFS ... open '/tmp.1234-ab.part'` for `out: /tmp`).
+ */
+async function occupantRefusal(target: string): Promise<string | null> {
+  const st = await lstat(target).catch(() => null);
+  if (!st || st.isFile()) return null;
+  const kind = st.isSymbolicLink()
+    ? "symbolic link"
+    : st.isDirectory()
+      ? "directory"
+      : "special file";
+  return `a ${kind} is already there, and only a regular file is replaced.`;
+}
+
+/**
+ * A staging path beside `target` that cannot itself exceed NAME_MAX: the suffix
+ * would otherwise push a filename the caller may legally use (up to 255 bytes)
+ * over the limit, failing a write that the target path alone permits.
+ */
+function stagingPath(target: string): string {
+  const suffix = `.${process.pid}-${Math.random().toString(36).slice(2, 8)}.part`;
+  const base = basename(target);
+  const room = 255 - Buffer.byteLength(suffix);
+  const trimmed =
+    Buffer.byteLength(base) <= room ? base : Buffer.from(base).subarray(0, room).toString();
+  return join(dirname(target), `${trimmed}${suffix}`);
+}
+
+/**
  * Write `data` to the caller's `out`, creating missing parents.
  *
  * Staged through a sibling temp file and renamed into place, so `out` only ever
@@ -68,7 +103,9 @@ export async function writeOutFile(out: string, data: Buffer): Promise<OutWriteR
   const resolved = resolveOutPath(out);
   if ("refusal" in resolved) return { failure: `Could not save to ${out}: ${resolved.refusal}` };
   const target = resolved.path;
-  const staged = `${target}.${process.pid}-${Math.random().toString(36).slice(2, 8)}.part`;
+  const occupied = await occupantRefusal(target);
+  if (occupied) return { failure: `Could not save to ${target}: ${occupied}` };
+  const staged = stagingPath(target);
   try {
     await mkdir(dirname(target), { recursive: true });
     await writeFile(staged, data);

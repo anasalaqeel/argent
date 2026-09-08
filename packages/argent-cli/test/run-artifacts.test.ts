@@ -427,7 +427,10 @@ describe("CLI run — artifact materialization end-to-end", () => {
     expect(JSON.stringify(reported.result)).toContain(handle.hostPath);
   });
 
-  it("--json: a successful save keeps stdout to the one result object", async () => {
+  // `out`'s describe tells the caller to pass on the absolute path it reports
+  // rather than the relative spelling they typed, so `--json` has to name it
+  // somewhere — stderr, since stdout is one parseable object.
+  it("--json: stdout stays one object and the destination is named on stderr", async () => {
     const handle = await localScreenshotHandle();
     state.screenshotData = { image: handle };
     const out = join(outDir, "shot.png");
@@ -436,7 +439,24 @@ describe("CLI run — artifact materialization end-to-end", () => {
 
     expect(() => JSON.parse(logs.join("\n"))).not.toThrow();
     expect(logs.join("\n")).not.toContain("Wrote:");
+    expect(errs.join("\n")).toContain(`Wrote: ${out}`);
     expect(fs.readFileSync(out)).toEqual(PNG);
+  });
+
+  it("reports the absolute destination under --json when `out` was relative", async () => {
+    const handle = await localScreenshotHandle();
+    state.screenshotData = { image: handle };
+    const cwd = process.cwd();
+    process.chdir(outDir);
+    try {
+      await run(
+        ["screenshot", "--args", JSON.stringify({ udid: "SIM-1", out: "./rel.png" }), "--json"],
+        opts
+      );
+      expect(errs.join("\n")).toContain(`Wrote: ${join(process.cwd(), "rel.png")}`);
+    } finally {
+      process.chdir(cwd);
+    }
   });
 
   it("screenshot --json prints the materialized result with a local path, not a handle", async () => {

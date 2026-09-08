@@ -188,11 +188,12 @@ export interface StepReport {
   /**
    * The step passed, but the WAY it passed weakens it as proof. Rendered as a
    * "⚠" suffix by the MCP client, and under the step line by the CLI. Raised by
-   * `await: { idle: true }` whenever the screen could not be proved settled, and
-   * by a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
-   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled:
+   * `await: { idle: true }` whenever the screen could not be proved settled; by
+   * a selector-less gesture (coordinate `tap`/`long-press`/`swipe`,
+   * centre-anchored `pinch`/`rotate`) that a tree-source outage left unsettled —
    * it is dispatched regardless, and the warning is the only thing separating it
-   * from one that waited.
+   * from one that waited; and by a `tool:` step carrying an `out`, which names a
+   * path on the client and so goes unwritten (see {@link unwrittenOutWarning}).
    */
   warning?: string;
   /** Underlying tool id for `tool` steps. */

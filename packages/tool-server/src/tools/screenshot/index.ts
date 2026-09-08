@@ -66,7 +66,7 @@ const zodSchema = z.object({
     .min(1)
     .optional()
     .describe(
-      "Save the PNG at this path on YOUR machine instead of the scratch temp path the capture produced. `~` expands, missing parent directories are created, and an existing file is overwritten. The absolute path is reported back with the capture - pass THAT one on, because `screenshot-diff` resolves a relative `baselinePath` against the tool-server's working directory rather than yours. Only a direct call writes: a flow step's arguments come from the flow file, so a `tool: screenshot` step inside a flow writes nothing and passes with a warning naming the path it skipped."
+      "Save the PNG at this path on YOUR machine instead of the scratch temp path the capture produced. `~` expands, missing parent directories are created, and an existing file is overwritten. The absolute path is reported back with the capture - pass THAT one on, because `screenshot-diff` resolves a relative `baselinePath` against the tool-server's working directory rather than yours. Only a direct call writes. Anywhere the arguments come from somewhere other than you - a `tool: screenshot` step replayed from a flow file, or a capture recorded through `flow-add-step` - nothing is written and the result says so."
     ),
 });
 

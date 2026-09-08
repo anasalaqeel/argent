@@ -447,7 +447,7 @@ Examples:
   if (saved && "failure" in saved) {
     // Nothing on stdout, matching failInvocation: `--json | jq` on a failed run
     // reads an empty stream and a non-zero status. The capture still succeeded,
-    // so the result rides along on stderr - it is the only thing naming the PNG
+    // so the result goes to stderr instead - it is the only thing naming the PNG
     // the run did leave on disk.
     if (json) {
       console.error(JSON.stringify({ error: saved.failure, result }, null, 2));
@@ -466,8 +466,10 @@ Examples:
 
   console.log(renderResult(result, meta.outputHint, images, json));
 
-  // Suppressed under `--json` so stdout stays one parseable object.
-  if (saved && !json) {
-    console.log(`Wrote: ${saved.wrote}`);
+  // The absolute destination, which `out`'s own describe tells the caller to
+  // pass on to `screenshot-diff` rather than the relative spelling they typed.
+  // On stderr under `--json` so stdout stays one parseable object.
+  if (saved) {
+    (json ? console.error : console.log)(`Wrote: ${saved.wrote}`);
   }
 }

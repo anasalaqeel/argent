@@ -392,6 +392,61 @@ describe("flow-add-step", () => {
     });
   });
 
+  // The skills tell an agent to pass `out` on every baseline capture. Recording
+  // one would bake a client-side path into the flow, where nothing writes it and
+  // every replay warns about it forever.
+  it("leaves a recorded screenshot step's `out` out of the flow, and says so", async () => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "out-rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      {
+        name: "out-rec",
+        project_root: tmpDir,
+        command: "screenshot",
+        args: '{"scale":1,"out":"/tmp/run7-baseline.png"}',
+      }
+    );
+
+    const flow = parseFlow(await onDisk("out-rec"));
+    expect(flow.steps).toEqual([{ kind: "tool", name: "screenshot", args: { scale: 1 } }]);
+    expect(result.message).toContain("/tmp/run7-baseline.png");
+    expect(result.message).toContain("was not written");
+    // The live call still ran with everything the caller passed.
+    expect(registry.invokeTool).toHaveBeenCalledWith("screenshot", {
+      scale: 1,
+      out: "/tmp/run7-baseline.png",
+    });
+  });
+
+  it("records a step carrying no `out` unchanged and unremarked", async () => {
+    const registry = createMockRegistry({
+      screenshot: { result: { url: "http://img" }, outputHint: "image" },
+    });
+    const tool = createFlowAddStepTool(registry);
+
+    await flowStartRecordingTool.execute(
+      {},
+      { name: "plain-rec", project_root: tmpDir, executionPrerequisite: PREREQ }
+    );
+    const result = await tool.execute(
+      {},
+      { name: "plain-rec", project_root: tmpDir, command: "screenshot", args: '{"scale":1}' }
+    );
+
+    expect(parseFlow(await onDisk("plain-rec")).steps).toEqual([
+      { kind: "tool", name: "screenshot", args: { scale: 1 } },
+    ]);
+    expect(result.message).not.toContain("was not written");
+  });
+
   it("returns the appended step as the `recorded` line, carrying delayMs", async () => {
     const registry = createMockRegistry({ tap: { result: { tapped: true } } });
     const tool = createFlowAddStepTool(registry);

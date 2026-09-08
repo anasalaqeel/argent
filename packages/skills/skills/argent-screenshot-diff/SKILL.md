@@ -23,7 +23,7 @@ Use `screenshot-diff` when pixel comparison can answer the verification question
 
 ## 3. Capture Rules
 
-Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context, and name the file with `out` - without it the PNG only exists on a scratch temp path you did not choose. Make the name unique to this run: one tool-server serves every agent on the machine, so a shared name lets another session overwrite your baseline between capture and diff.
+Use normal downscaled `screenshot` calls for UI context and state checks. Use full-resolution screenshots only when saving baseline/current PNG files for visual regression comparison. Suppress the image block so the full-size PNG is not loaded into context, and name the file with `out` - without it the PNG only exists on a scratch temp path you did not choose. Make the name unique to this run: several agents share this filesystem, so a shared name lets another session overwrite your baseline between capture and diff.
 
 ```json
 {

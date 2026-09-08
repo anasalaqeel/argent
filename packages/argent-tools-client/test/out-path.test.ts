@@ -1,5 +1,15 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve, sep } from "node:path";
 import { resolveOutPath, writeOutFile } from "../src/out-path.js";
@@ -132,6 +142,63 @@ describe("writeOutFile", () => {
     expect("failure" in r).toBe(true);
     expect((await readdir(root)).filter((n) => n.includes(".part"))).toEqual([]);
     expect(await readdir(out)).toEqual(["keep"]);
+  });
+
+  // `rename` does not follow a symlink and does not care what it unlinks, so
+  // without a check `out: ~/shots` where shots -> a directory destroys the link
+  // and reports a save. A truncating write refused this with EISDIR.
+  it("refuses a symlink at `out` rather than replacing it", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const realDir = join(root, "real");
+    await mkdir(realDir);
+    const linkToDir = join(root, "shots");
+    await symlink(realDir, linkToDir);
+    const vault = join(root, "vault.png");
+    await writeFile(vault, "yesterday");
+    const linkToFile = join(root, "latest.png");
+    await symlink(vault, linkToFile);
+
+    for (const target of [linkToDir, linkToFile]) {
+      const r = await writeOutFile(target, Buffer.from("png"));
+      expect(r).toEqual({
+        failure: `Could not save to ${target}: a symbolic link is already there, and only a regular file is replaced.`,
+      });
+      expect((await lstat(target)).isSymbolicLink()).toBe(true);
+    }
+    expect(await readFile(vault, "utf8")).toBe("yesterday");
+  });
+
+  // rename's own errno names the `.part` sibling the caller never mentioned.
+  it("names the directory at `out`, not the staging file", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const dir = join(root, "shots");
+    await mkdir(dir);
+
+    const r = await writeOutFile(dir, Buffer.from("png"));
+
+    expect(r).toEqual({
+      failure: `Could not save to ${dir}: a directory is already there, and only a regular file is replaced.`,
+    });
+    expect(await readdir(root)).toEqual(["shots"]);
+  });
+
+  it("replaces a regular file already at `out`", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const out = join(root, "baseline.png");
+    await writeFile(out, "yesterday");
+
+    expect(await writeOutFile(out, Buffer.from("today"))).toEqual({ wrote: out });
+    expect(await readFile(out, "utf8")).toBe("today");
+  });
+
+  // The staging suffix must not push a filename the caller may legally use over
+  // NAME_MAX, failing a write the target path alone permits.
+  it("writes a basename at the length limit", async () => {
+    root = await mkdtemp(join(tmpdir(), "outwrite-"));
+    const out = join(root, `${"x".repeat(251)}.png`);
+
+    expect(await writeOutFile(out, Buffer.from("png"))).toEqual({ wrote: out });
+    expect(await readFile(out, "utf8")).toBe("png");
   });
 
   it("propagates a refusal instead of writing", async () => {

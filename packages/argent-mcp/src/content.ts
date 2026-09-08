@@ -345,10 +345,10 @@ export async function flowRunToMcpContent(
     // `error` is the legacy spelling of `reason`.
     const reason = step.reason ?? step.error;
     const suffix = reason ? ` — ${reason}` : "";
-    const warning = step.warning ? ` ⚠ ${step.warning}` : "";
+    const warning = step.warning ?? unwrittenOutWarning(step.args);
     blocks.push({
       type: "text",
-      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning}`,
+      text: `[${num}] ${glyph}${stepIndent(step.depth)}${stepLabel(step)}${suffix}${warning ? ` ⚠ ${warning}` : ""}`,
     });
 
     if (step.result !== undefined) {
@@ -377,6 +377,28 @@ export async function flowRunToMcpContent(
     blocks.push({ type: "text", text: `Flow "${result.flow}" complete.` });
   }
   return blocks;
+}
+
+/**
+ * The runner's own warning for a step whose `out` it could not honor, restated
+ * for a tool-server too old to send one.
+ *
+ * `out` is written by the client, so a flow step never writes it — but only a
+ * tool-server carrying that runner says so, and `argent link` / ARGENT_TOOLS_URL
+ * point this client at an arbitrary one with no version negotiation. Without
+ * this the step reports a plain pass beside a `Saved:` line naming a scratch
+ * path, and a PNG an earlier run left at `out` is diffed as this capture. The
+ * CLI needs no counterpart: `argent flow run` refuses env and link routing, so
+ * its runner is always the local one.
+ */
+function unwrittenOutWarning(args: unknown): string | null {
+  const out = requestedOut(args);
+  if (!out) return null;
+  return (
+    `\`out\` was not written: a flow step's arguments come from the flow file, not from you, so ` +
+    `no step writes to this machine. Anything already at ${out} is from an earlier run - do not ` +
+    `diff against it. Call \`screenshot\` directly to keep a capture.`
+  );
 }
 
 /**
