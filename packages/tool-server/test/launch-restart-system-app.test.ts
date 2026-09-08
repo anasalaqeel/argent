@@ -51,6 +51,8 @@ function makeNativeApi(): NativeDevtoolsApi {
     socketPath: "/tmp/test.sock",
     ensureEnvReady: async () => {},
     reverifyEnv: async () => {},
+    armsEnv: true,
+    withdrawEnv: async () => {},
     getInitFailure: () => null,
     isConnected: () => false,
     isAppRunning: async () => false,
