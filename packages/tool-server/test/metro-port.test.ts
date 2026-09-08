@@ -76,7 +76,6 @@ function publishDescriptor(options: { metroPort?: number; devices?: unknown[] } 
   );
 
   process.env.ARGENT_DEVICE_PROVIDERS = descriptorPath;
-  __resetExternalDeviceCacheForTesting();
 }
 
 beforeEach(() => {
