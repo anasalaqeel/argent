@@ -257,13 +257,13 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
 
   it("names the surface a Chromium reader can actually use for discovery", () => {
     // gesture-swipe declares no chromium and the gate rejects it there, so the
-    // verb in the shared-surface summary has to be the one that works. The literal
-    // cannot see gesture-swipe gaining chromium support, so the capability is held
-    // too.
+    // shared-surface summary may not count scrolling among the verbs that carry
+    // over. The literal cannot see gesture-swipe gaining chromium support, so the
+    // capability is held too.
     expect(gestureSwipeTool.capability?.chromium, gestureSwipeTool.id).toBeUndefined();
     pinsOnce(
       readFileSync(DEVICE_INTERACT_SKILL, "utf8"),
-      "describe/tap/scroll/keyboard/screenshot surface drives all of them."
+      "describe/tap/keyboard/screenshot surface drives it, but scrolling"
     );
   });
 
