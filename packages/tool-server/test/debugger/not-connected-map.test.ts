@@ -223,9 +223,13 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       ["chromium", chromiumGuidance],
     ] as const) {
       // Both arms answer the ask above, so passing it on is a step with no
-      // decision left in it.
-      expect(guidance, `${where}: closes the detail's ask`).toContain(
-        "the sentence above answers it, so skip that"
+      // decision left in it - and only one of the detail's three branches makes
+      // it, so the sentence has to say where. Unscoped it is false of the two it
+      // is not about, one of which is the branch the Metro arm's next sentence
+      // exists for.
+      expect(guidance, `${where}: closes the detail's ask, where it makes one`).toContain(
+        "Where the detail asks the user to check which state the app is in, the sentence " +
+          "above answers it, so skip that"
       );
       // And neither raises a resume of its own: nothing in the catalogue can
       // resume a paused runtime, so a resume ask here has no tool behind it.
