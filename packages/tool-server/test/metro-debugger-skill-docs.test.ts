@@ -431,7 +431,19 @@ describe("the prose derives what the code decides", () => {
       // These three name the windowless state, which is what the "relaunch there"
       // bar exists for; naming it and then offering a relaunch is the shape.
       expectNoForbiddenAdvice(tool.description, `${tool.id}'s description`);
+      // And none of them generalises it: debugger-status and debugger-log-registry
+      // are Chromium tools that resolve the same page service and answer with a
+      // not_connected result there instead of failing, which is the carve-out the
+      // tools reference states. A universal here contradicts it in one sentence.
+      expect(tool.description, `${tool.id}: claims the failure for itself only`).not.toMatch(
+        /every chromium tool/i
+      );
     }
+    for (const answers of [debuggerStatusTool, logRegistryTool])
+      expect(
+        answers.description,
+        `${answers.id} is the counterexample the universal would swallow`
+      ).toMatch(/Never fails when the runtime is simply unreachable|returns .*not_connected/i);
     // chromium-tabs is the tool that can PRODUCE the state the other two only
     // report: close() returns list() with no fallback when nothing is left, so
     // the last close succeeds into it. And on Electron the action that would
