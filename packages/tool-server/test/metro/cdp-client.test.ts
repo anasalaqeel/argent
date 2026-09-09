@@ -29,6 +29,15 @@ afterEach(async () => {
   await new Promise<void>((resolve) => wss.close(() => resolve()));
 });
 
+async function rejection(p: Promise<unknown>): Promise<unknown> {
+  try {
+    await p;
+  } catch (err) {
+    return err;
+  }
+  throw new Error("expected the promise to reject");
+}
+
 function waitForServer(): Promise<WebSocket> {
   return new Promise((resolve) => {
     if (serverWs) return resolve(serverWs);
@@ -37,6 +46,45 @@ function waitForServer(): Promise<WebSocket> {
 }
 
 describe("CDPClient", () => {
+  /**
+   * The premise the request-timeout message now rests on: a pause the session was
+   * told about is refused before the timer is armed, so a timeout is evidence no
+   * Debugger.paused arrived. Held behaviourally rather than as a comment, because
+   * the message asserts what send() does and the two must not drift.
+   */
+  it("refuses Runtime.evaluate while paused instead of timing it out", async () => {
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id } = JSON.parse(String(raw)) as { id: number };
+      ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.paused",
+        params: {
+          reason: "other",
+          callFrames: [{ url: "http://localhost:8081/index.bundle", location: { lineNumber: 41 } }],
+        },
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // A timeout long enough that timing out rather than refusing would take it:
+    // the rejection has to come from the guard, not from the timer.
+    const err = await rejection(client.send("Runtime.evaluate", { expression: "1" }, 5_000));
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.JS_RUNTIME_PAUSED,
+    });
+    expect((err as Error).message).toContain(
+      "paused at a breakpoint at http://localhost:8081/index.bundle:42"
+    );
+    await client.disconnect();
+  });
+
   it("connects and disconnects", async () => {
     const client = new CDPClient(`ws://localhost:${port}`);
     await client.connect();
@@ -256,15 +304,6 @@ describe("CDPClient", () => {
   // precise code instead of surfacing as an unclassified plain Error (which
   // telemetry buckets under REGISTRY_SERVICE_INITIALIZATION_FAILED / unknown).
   describe("failure signal classification", () => {
-    async function rejection(p: Promise<unknown>): Promise<unknown> {
-      try {
-        await p;
-      } catch (err) {
-        return err;
-      }
-      throw new Error("expected the promise to reject");
-    }
-
     it("send before connect rejects with DEBUGGER_CDP_NOT_CONNECTED", async () => {
       const client = new CDPClient(`ws://localhost:${port}`);
       // never connect()ed
@@ -306,16 +345,32 @@ describe("CDPClient", () => {
         message,
         "If it is paused, ask them to resume it — quitting throws the debug session away."
       );
-      // The two arms are mutually destructive and this message names no way to choose
-      // between them — nothing in the catalogue reports pausedness. Left unlabelled, an
-      // agent guesses, and guessing "hung" throws the session away. The debugger-status
-      // half has to stay scoped to an established session: this same message is the
-      // detail of a not_connected result when the connect pipeline is what timed out.
+      // The two arms are mutually destructive, so the message has to say what does
+      // and does not narrow the choice. A pause the session was told about never
+      // reaches this timer: send() rejects Runtime.evaluate up front through
+      // BLOCKED_WHILE_PAUSED. That evidence is only as good as Debugger being
+      // enabled, which the Chromium connect never does, so the ask stands. The
+      // debugger-status half has to stay scoped to an established session: this same
+      // message is the detail of a not_connected result when the connect pipeline is
+      // what timed out.
       pinsOnce(
         message,
-        "Nothing here tells the two apart — no tool reports pausedness, and once the " +
-          'session is established debugger-status reports "connected" either way — so have ' +
-          "the user check the app before choosing."
+        "This send timed out rather than being refused, so no Debugger.paused reached this " +
+          "session — with one in hand Runtime.evaluate is rejected up front as " +
+          "JS_RUNTIME_PAUSED naming the location, never timed out."
+      );
+      pinsOnce(
+        message,
+        "That only rules out a pause the session was told about: Debugger is enabled on the " +
+          "Metro connect and never on the Chromium one, and once the session is established " +
+          'debugger-status reports "connected" either way — so have the user check the app ' +
+          "before choosing."
+      );
+      // The claim this replaced, which the same send() disproves one branch above
+      // the timer (see the JS_RUNTIME_PAUSED case below): pausedError names the
+      // breakpoint and its location.
+      expect(message, "does not deny that pausedness is ever reported").not.toMatch(
+        /no tool reports pausedness/i
       );
       expect(message, "does not promise connected on the connect surface").not.toMatch(
         /debugger-status says "connected" either way/i
@@ -331,7 +386,7 @@ describe("CDPClient", () => {
       // Both ends of the retry discipline. Each attempt waits out this full timeout,
       // so a loosened "unless it looks slow" at one end or a "retry until it answers"
       // at the other undoes the reason the guidance is in the message at all.
-      pinsOnce(message, "Do not retry in a loop. Nothing here tells the two apart");
+      pinsOnce(message, "Do not retry in a loop. This send timed out rather than being refused");
       // Where the Chromium recovery lives. This message no longer restates it:
       // it named a relaunch procedure that had to stay in step with two guidance
       // strings and four prose surfaces, and the five drifted apart. The one

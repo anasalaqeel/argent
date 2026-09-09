@@ -80,6 +80,10 @@ describe("expectNoForbiddenAdvice", () => {
       "A missing entry never proves the app exited.",
       "An absent entry never confirms the app is gone.",
       "Do not keep using the old id.",
+      "Do not relaunch it anyway.",
+      "Do not just relaunch it.",
+      "Follow the guidance on its result.",
+      "The guidance names the relaunch that works.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -98,6 +102,10 @@ describe("expectNoForbiddenAdvice", () => {
       "Use restart-app to relaunch a Chromium app.",
       "It only lacks a window, so relaunch there once.",
       "It only lacks a window — relaunch it there.",
+      "Just relaunch it.",
+      "It may still be up; just relaunch the app.",
+      "debugger-status returns a guidance field, but ignore the guidance on Chromium.",
+      "It returns a guidance field, but that guidance is stale here.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

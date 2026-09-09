@@ -341,9 +341,13 @@ export class CDPClient {
           new FailureError(
             `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
               `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
-              `Do not retry in a loop. Nothing here tells the two apart — no tool reports ` +
-              `pausedness, and once the session is established debugger-status reports ` +
-              `"connected" either way — so have the user check the app before choosing. If it ` +
+              `Do not retry in a loop. This send timed out rather than being refused, so no ` +
+              `Debugger.paused reached this session — with one in hand Runtime.evaluate is ` +
+              `rejected up front as JS_RUNTIME_PAUSED naming the location, never timed out. ` +
+              `That only rules out a pause the session was told about: Debugger is enabled on ` +
+              `the Metro connect and never on the Chromium one, and once the session is ` +
+              `established debugger-status reports "connected" either way — so have the user ` +
+              `check the app before choosing. If it ` +
               `is paused, ask them to resume it — quitting throws the debug session away. If ` +
               `it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
               `Chromium restart-app is refused and boot-device only starts an app, so the quit ` +

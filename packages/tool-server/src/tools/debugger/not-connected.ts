@@ -32,14 +32,14 @@ export interface DebuggerNotConnectedResult {
 /**
  * The detail beside this guidance is the shared request-timeout message, which
  * also covers debugger-evaluate — where a breakpoint really can hang the call, so
- * it offers a resume. The connect pipeline cannot pause, so the guidance has to
- * retire that whole branch and not only the phrase, or the two ship contradicting
- * instructions in one payload.
+ * it offers a resume and asks the user which state the app is in. The connect
+ * pipeline cannot pause, so the guidance has to retire that whole branch and not
+ * only the phrase, or the two ship contradicting instructions in one payload.
  */
 const DETAIL_NAMES_A_BREAKPOINT =
-  'The detail says "frozen, or paused at a breakpoint" and offers to resume it ' +
-  "because that wording is shared with debugger-evaluate; here only the frozen " +
-  "half applies, so ignore its resume branch. ";
+  'The detail says "frozen, or paused at a breakpoint" because that wording is ' +
+  "shared with debugger-evaluate; here only the frozen half applies, so ignore " +
+  "its resume branch and the ask that the user choose between the two. ";
 
 /**
  * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
@@ -115,11 +115,11 @@ export function classifyNotConnected(err: unknown): DebuggerNotConnectedReason |
 }
 
 /**
- * The relaunch both Chromium overrides route to. Stated once: it is the same
- * procedure on either reason, and the two disagreed about the mechanism when each
- * carried its own copy. `parseChromiumCdpPort` reads the port straight out of the
- * id with no check against discovery, which is why a browser `list-devices` never
- * probes is still drivable.
+ * The relaunch both Chromium overrides route to. One copy, because it is the same
+ * procedure on either reason and a second copy is free to drift off this one.
+ * `parseChromiumCdpPort` reads the port straight out of the id with no check
+ * against discovery, which is why a browser `list-devices` never probes is still
+ * drivable.
  */
 const CHROMIUM_RELAUNCH =
   "To relaunch: restart-app is refused on Chromium and boot-device only starts an app and " +
@@ -138,7 +138,8 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "a service tag opens every detail, so read past that. " +
     "'Chromium CDP on port': the app answered and has no drivable page, so it is up and " +
     "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one — " +
-    "and do not relaunch, which recovers nothing here. If that detail closes by asking " +
+    "and do not relaunch onto a live app, which gives you a second copy and no window. If " +
+    "that detail closes by asking " +
     "about --remote-debugging-port, ignore it: this port answered, so the flag was passed. " +
     "'Chromium CDP discovery: GET': the discovery request itself. 'could not connect' means " +
     "nothing answered that port — consistent with an exit, not proof of one. 'failed (HTTP " +

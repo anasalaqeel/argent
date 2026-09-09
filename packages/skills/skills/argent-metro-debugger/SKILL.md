@@ -25,7 +25,7 @@ adb -s <serial> reverse tcp:8081 tcp:8081
 
 ## 2. Tool Overview
 
-All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, or Vega serial — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
+All tools accept `port` (default 8081) AND `device_id` (the iOS Simulator UDID, Android serial, Vega serial, or `chromium-cdp-<port>` — a.k.a. `logicalDeviceId`, the CDP-reported id that matches the device; on Chromium `port` is ignored). Vega's legacy inspector reports no `logicalDeviceId`, so there keep passing the serial. Always make sure you target the correct app on the correct device.
 
 One Metro port can serve multiple connected devices (e.g. two simulators on `localhost:8081`, or an iOS simulator alongside an Android emulator with `adb reverse` set up). `device_id` pins every debugger/network/profiler call to a specific device so sessions do not collide.
 

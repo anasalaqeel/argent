@@ -22,6 +22,14 @@ import { debuggerInspectElementTool } from "../src/tools/debugger/debugger-inspe
 import { debuggerReloadMetroTool } from "../src/tools/debugger/debugger-reload-metro";
 import { debuggerComponentTreeTool } from "../src/tools/debugger/debugger-component-tree";
 import { debuggerConnectTool } from "../src/tools/debugger/debugger-connect";
+import { listDevicesTool } from "../src/tools/devices/list-devices";
+import { chromiumTabsTool } from "../src/tools/chromium-tabs";
+import { reinstallAppTool } from "../src/tools/reinstall-app";
+import { openUrlTool } from "../src/tools/open-url";
+import { chromiumCookiesTool } from "../src/tools/chromium-cookies";
+import { chromiumStorageTool } from "../src/tools/chromium-storage";
+import { networkLogsTool } from "../src/tools/network/network-logs";
+import { networkRequestTool } from "../src/tools/network/network-request";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { createDebuggerStatusTool } from "../src/tools/debugger/debugger-status";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
@@ -49,12 +57,32 @@ const CREATE_FLOW_RECOVERY = path.join(
 );
 const ARGENT_RULE = path.resolve(__dirname, "../../skills/rules/argent.md");
 const TOOLS_REFERENCE = path.resolve(__dirname, "../../docs/docs/reference/tools.mdx");
+const CONFIGURATION_REFERENCE = path.resolve(
+  __dirname,
+  "../../docs/docs/reference/configuration.mdx"
+);
+const INTERACTING_FEATURE = path.resolve(
+  __dirname,
+  "../../docs/docs/features/interacting-with-apps.mdx"
+);
+const DEBUGGING_FEATURE = path.resolve(__dirname, "../../docs/docs/features/debugging.mdx");
+const CHROMIUM_REFERENCE = path.join(SKILLS, "argent-device-interact/references/chromium.md");
 
 const restartAppTool = createRestartAppTool({} as unknown as Registry);
 const debuggerStatusTool = createDebuggerStatusTool({} as unknown as Registry);
 const bootDeviceParams = createBootDeviceTool({} as unknown as Registry).zodSchema as unknown as {
-  shape: Record<string, { description?: string }>;
+  shape: Record<
+    string,
+    { description?: string; unwrap?: () => { minValue?: number | null; maxValue?: number | null } }
+  >;
 };
+
+/** The bound zod enforces, so the prose stating it cannot drift off the parser. */
+function bootTimeoutBound(which: "minValue" | "maxValue"): number {
+  const bound = bootDeviceParams.shape.bootTimeoutMs?.unwrap?.()[which];
+  expect(bound, `bootTimeoutMs declares a ${which}`).toEqual(expect.any(Number));
+  return bound as number;
+}
 const restartApp = restartAppTool.capability;
 
 /**
@@ -215,12 +243,21 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
       expect(norm, `${where}: names debugger-status as the source of the recovery`).toContain(
         "debugger-status"
       );
-      expect(norm, `${where}: says which field carries it`).toContain("guidance");
-      // And that the relaunch is not the agent's to make. The reason why —
-      // boot-device only ever starts an app — is stated in the guidance these
-      // surfaces delegate to; restating it here is what grew the five copies.
-      expect(norm, `${where}: the relaunch is the user's`).toMatch(
-        /the user's move|the quit is the user's|ask the user to quit/
+      // The field AND the instruction attached to it, in one needle. Split, the
+      // two are satisfied by a surface that names the guidance and then tells the
+      // reader to discard it, which is the shape a rewrite reaches for.
+      expect(norm, `${where}: tells the reader to follow that field`).toContain(
+        "follow the guidance"
+      );
+      // And that the quit is not the agent's to make. The relaunch can be: on the
+      // Electron branch it is boot-device. The reason why — boot-device only ever
+      // starts an app — is stated in the guidance these surfaces delegate to;
+      // restating it here is what grew the five copies.
+      expect(norm, `${where}: the quit is the user's`).toMatch(
+        /the quit is the user's|ask the user to quit/
+      );
+      expect(norm, `${where}: does not hand the relaunch to the user as well`).not.toMatch(
+        /the relaunch is the user's/
       );
     }
     // Four of the five name the tool, so they must also say it is refused. The
@@ -250,8 +287,13 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
       row(DEVICE_INTERACT_SKILL, "Open an app"),
       "on Chromium it confirms the running renderer and starts nothing"
     );
-    expect(deviceInteract, "section 3 carries the same carve-out").toMatch(
-      /launch-app[^.]*Chromium[^.]*starts nothing|Chromium[^.]*launch-app[^.]*starts nothing/i
+    // Its own sentence, not the row above: the row satisfies any whole-file
+    // pattern loose enough to match the section, so the needle has to be the
+    // wording only section 3 has.
+    pinsOnce(
+      deviceInteract,
+      "On Chromium there is no home screen and no other app to start: navigate with " +
+        "`open-url`, since `launch-app` only confirms the running renderer and starts nothing."
     );
   });
 
@@ -263,7 +305,8 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
     expect(gestureSwipeTool.capability?.chromium, gestureSwipeTool.id).toBeUndefined();
     pinsOnce(
       readFileSync(DEVICE_INTERACT_SKILL, "utf8"),
-      "describe/tap/keyboard/screenshot surface drives it, but scrolling"
+      "describe/tap/keyboard/screenshot surface drives it, but scrolling, tabs, cookies and " +
+        "storage differ"
     );
   });
 
@@ -292,27 +335,115 @@ describe("the boot-device hazards the recovery depends on", () => {
     const description = bootDeviceParams.shape.bootTimeoutMs?.description ?? "";
     expect(description).toContain(`${DEFAULT_READY_TIMEOUT_MS / 1000}s deadline`);
     expect(description, "zod rejects rather than clamps").not.toMatch(/clamp/i);
+    // Derived from the schema's own bounds: a widened .min/.max leaves the
+    // sentence stating a range the parser no longer enforces.
+    pinsOnce(
+      description,
+      `Rejected outside [${bootTimeoutBound("minValue") / 1000}s, ` +
+        `${bootTimeoutBound("maxValue") / 60_000}min]`
+    );
   });
 });
 
 describe("the prose derives what the code decides", () => {
-  it("derives every copy of the probe set, in the two files no other test reads", () => {
-    // rules/argent.md is loaded for every argent session and the debugger skill's
+  it("derives every copy of the probe set, on each surface that states one", () => {
+    // rules/argent.md is loaded for every argent session, the debugger skill's
     // prerequisites paragraph is where an agent learns where a chromium-cdp-<port>
-    // id comes from - so a reader can meet the probe set in either and nowhere
-    // else. A restated set drifts wherever nothing derives it.
+    // id comes from, list-devices' own description is the highest-traffic copy of
+    // all, and configuration.mdx is the page a human reads - so a reader can meet
+    // the probe set on any of the four. A restated set drifts wherever nothing
+    // derives it, and adding a default port has to turn every copy red at once.
+    const ports = defaultChromiumPorts();
     pinsOnce(
       readFileSync(ARGENT_RULE, "utf8"),
       "auto-discovered on port `" +
-        defaultChromiumPorts().join("`, `") +
+        ports.join("`, `") +
         "`, `ARGENT_CHROMIUM_PORTS` and the ports `boot-device` opened"
     );
     pinsOnce(
       readFileSync(DEBUGGER_SKILL, "utf8"),
       "auto-discovered by `list-devices` on `" +
-        defaultChromiumPorts().join("`, `") +
+        ports.join("`, `") +
         "`, `ARGENT_CHROMIUM_PORTS` and the ports `boot-device` opened)"
     );
+    pinsOnce(
+      listDevicesTool.description,
+      `probing CDP debugging ports (${ports.join(", ")}, whatever ` +
+        "ARGENT_CHROMIUM_PORTS=<comma-separated-ports> lists, and the ports boot-device " +
+        "itself opened)"
+    );
+    pinsOnce(
+      readFileSync(CONFIGURATION_REFERENCE, "utf8"),
+      `Chromium apps, on top of \`${ports.join("`, `")}\` and the ports \`boot-device\` ` +
+        "itself opened"
+    );
+  });
+
+  it("pins the windowless failure on every tool that resolves the page service", () => {
+    // chromium-tabs, chromium-cookies and chromium-storage all resolve
+    // ChromiumCdp, whose factory calls discoverPrimaryPage - so all three die
+    // before execute on an app that is up with no window, and all three close
+    // with a "Fails if …" list that reads as complete. One of them saying so and
+    // the other two not is how a reader concludes the device id is wrong.
+    for (const tool of [chromiumTabsTool, chromiumCookiesTool, chromiumStorageTool]) {
+      expect(tool.capability?.chromium, `${tool.id} is a Chromium tool`).toBeDefined();
+      expect(tool.description, `${tool.id}: names the windowless failure`).toMatch(
+        /up with no open tab\/window/
+      );
+      expect(tool.description, `${tool.id}: says the window is the user's`).toMatch(
+        /ask the user to reopen a window/i
+      );
+    }
+  });
+
+  it("carves Chromium out on the two feature pages, for each tool the gate refuses", () => {
+    // These are the public docs, and each sentence lists several agent actions of
+    // which only some survive on Chromium. Derived from the capabilities so a tool
+    // gaining or losing chromium support cannot leave the carve-out standing.
+    for (const tool of [restartAppTool, reinstallAppTool, debuggerReloadMetroTool]) {
+      expect(tool.capability?.chromium, `${tool.id} is refused on Chromium`).toBeUndefined();
+    }
+    expect(openUrlTool.capability?.chromium, "open-url is the one that survives").toBeDefined();
+    pinsOnce(
+      readFileSync(INTERACTING_FEATURE, "utf8"),
+      "On a Chromium app it does neither: the user quits the app, and the agent starts an " +
+        "Electron app again itself. Argent does not reinstall a Chromium app."
+    );
+    pinsOnce(
+      readFileSync(DEBUGGING_FEATURE, "utf8"),
+      "On a Chromium app only the URL is the agent's: the user quits the app, and the agent " +
+        "starts an Electron app again itself."
+    );
+  });
+
+  it("says chromium-tabs cannot reopen the window, where a tab reader reads it", () => {
+    // The tool's own description says it; references/chromium.md is where the
+    // interaction skill sends a reader for tabs, and it had the sentence with
+    // nothing holding it.
+    pinsOnce(
+      readFileSync(CHROMIUM_REFERENCE, "utf8"),
+      "which needs an existing page, so it cannot reopen the last window once it is closed"
+    );
+  });
+
+  it("tells a list-devices reader what a missing Chromium entry does not mean", () => {
+    // Four recovery surfaces rest on this one fact, and this description is the
+    // only place it is stated to a reader with no skill open.
+    pinsOnce(listDevicesTool.description, "A missing Chromium entry does not mean the app exited");
+    pinsOnce(listDevicesTool.description, "Keep the id boot-device returned.");
+    expectNoForbiddenAdvice(listDevicesTool.description, "list-devices' description");
+  });
+
+  it("names the Chromium id shape on every tool that takes a device id", () => {
+    // These two are the Chromium-capable half of the network pair; a device_id
+    // description enumerating only UDID and serial reads as a platform list.
+    for (const tool of [networkLogsTool, networkRequestTool]) {
+      const shape = (
+        tool.zodSchema as unknown as { shape: Record<string, { description?: string }> }
+      ).shape;
+      expect(tool.capability?.chromium, `${tool.id} is Chromium-capable`).toBeDefined();
+      pinsOnce(shape.device_id?.description, "chromium-cdp-<port>");
+    }
   });
 
   it("answers every not-connected reason the debugger can report", () => {

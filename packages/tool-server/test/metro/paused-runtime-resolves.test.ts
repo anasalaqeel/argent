@@ -29,8 +29,20 @@ let wss: WebSocketServer;
 let mockPort: number;
 let registry: Registry;
 const seen: string[] = [];
-const awaited: string[] = [];
-const withheld: string[] = [];
+/** Request ids of the awaited evaluates — the sends the paused model withholds. */
+const awaited = new Set<number>();
+/** Request ids the mock answered, recorded at the one place it can answer. */
+const answered = new Set<number>();
+
+/**
+ * The only path that replies. Recording here rather than beside each caller is
+ * what makes `answered` observe the mock instead of restating it: a reply added
+ * anywhere in `handle` goes through this and shows up in the disjointness check.
+ */
+function reply(ws: WebSocket, id: number, result: unknown) {
+  answered.add(id);
+  ws.send(JSON.stringify({ id, result }));
+}
 
 function handle(ws: WebSocket, raw: string) {
   const { id, method, params } = JSON.parse(raw) as {
@@ -40,15 +52,14 @@ function handle(ws: WebSocket, raw: string) {
   };
   seen.push(method);
   if (method === "Runtime.evaluate" && params?.awaitPromise) {
-    awaited.push(method);
-    withheld.push(method); // paused: never answers
+    awaited.add(id); // paused: never answers
     return;
   }
   if (method === "Debugger.enable") {
-    ws.send(JSON.stringify({ id, result: { debuggerId: "paused-mock" } }));
+    reply(ws, id, { debuggerId: "paused-mock" });
     return;
   }
-  ws.send(JSON.stringify({ id, result: {} }));
+  reply(ws, id, {});
 }
 
 beforeAll(async () => {
@@ -110,17 +121,20 @@ describe("a JS runtime that never answers an awaited evaluate", () => {
     // timeouts; without these the test would pass on a mock that never got
     // that far.
     expect(seen).toContain("Runtime.addBinding");
-    expect(seen.filter((m) => m === "Runtime.evaluate").length).toBeGreaterThanOrEqual(2);
+    // The two the pipeline aims at the JS thread, and the whole of them:
+    // addBinding's probe and DISABLE_LOGBOX_SCRIPT, both through cdp.evaluate,
+    // which defaults awaitPromise: true. A third would mean the pipeline grew a
+    // JS-thread send this model does not cover.
+    expect(seen.filter((m) => m === "Runtime.evaluate").length).toBe(2);
+    expect(awaited.size, "both of them await their promise").toBe(2);
     // And that the mock WITHHELD them. Reaching the sends is not the input under
-    // test: a mock that answers everything reaches them identically, so without
-    // this the paused model can be softened away and the test still passes. The
-    // count is the awaited evaluates, not every Runtime.evaluate: readViewport's
-    // un-awaited probe (answered above) is not part of the paused model.
-    expect(awaited.length, "the pipeline must send at least one awaited evaluate").toBeGreaterThan(
-      0
-    );
-    expect(withheld.length, "the mock must leave every awaited evaluate unanswered").toBe(
-      awaited.length
-    );
+    // test: a mock that answers everything reaches them identically. So this is
+    // asserted against what the mock actually put on the wire — `answered` is
+    // written only by `reply` — and not against a second list written beside the
+    // first, which holds under any mock behaviour and proves nothing.
+    for (const id of awaited) {
+      expect(answered, `the mock answered awaited evaluate id=${id}`).not.toContain(id);
+    }
+    expect(answered.size, "the rest of the pipeline was answered").toBeGreaterThan(0);
   }, 40_000);
 });

@@ -6,7 +6,9 @@ import {
   getFailureSignal,
   type FailureSignal,
 } from "@argent/registry";
+import type { Registry } from "@argent/registry";
 import { classifyNotConnected, buildNotConnected } from "../../src/tools/debugger/not-connected";
+import { createRestartAppTool } from "../../src/tools/restart-app";
 import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
 import { pinsOnce } from "../helpers/pins";
 import { discoverPrimaryPage, ensureCdpReachable } from "../../src/chromium-server/cdp-session";
@@ -131,6 +133,17 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       );
       expect(guidance, "no instruction to loop anyway").not.toMatch(/until it (answers|connects)/);
     }
+    // And that each arm still ends at a remedy. Pricing the retry is only half of
+    // it: with the remedy gone the reader is told what not to do and nothing to
+    // do, and the Metro arm's was held by nothing.
+    pinsOnce(
+      metro().guidance,
+      `Restart it (${createRestartAppTool({} as unknown as Registry).id}), then retry once.`
+    );
+    pinsOnce(
+      chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT).guidance,
+      "To relaunch: restart-app is refused on Chromium"
+    );
   });
 
   /**
@@ -368,7 +381,7 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       guidance,
       "'Chromium CDP on port': the app answered and has no drivable page, so it is up and " +
         "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one " +
-        "— and do not relaunch, which recovers nothing here."
+        "— and do not relaunch onto a live app, which gives you a second copy and no window."
     );
     // #880: that message asks about --remote-debugging-port on the port that just
     // answered the request it reports on, which is one plausible step from a
