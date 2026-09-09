@@ -101,11 +101,13 @@ const FORBIDDEN: [RegExp, string][] = [
   // Chromium boot-device only starts an app, so use restart-app"). It reaches
   // across clauses, so it stops where the topic changes: at the sentence, at the
   // line, at a table cell, and at another platform, which hands the instruction
-  // to somebody else.
+  // to somebody else. No negation guard, unlike its neighbours: everything before
+  // the "so" is the reason, and a negated reason is the commonest way to write
+  // this one ("it will not come back, so use restart-app").
   [
     new RegExp(
       String.raw`chromium(?:(?!\b${OTHER_PLATFORM}\b)[^.\n|]){0,80}\bso ` +
-        String.raw`(?:you (?:can |should )?)?(?<!${NEGATED})(?:use|call) \`?restart-app`,
+        String.raw`(?:you (?:can |should )?)?(?:use|call) \`?restart-app`,
       "i"
     ),
     "restart-app on Chromium",

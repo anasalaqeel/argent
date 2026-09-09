@@ -193,6 +193,12 @@ describe("expectNoForbiddenAdvice", () => {
       "On Chromium there is no launch-app, so use restart-app.",
       "On Chromium it never stops one, so use restart-app.",
       "On Chromium the exit cannot be confirmed, so use restart-app.",
+      // Everything before the "so" is the reason, so a negation in it is about
+      // the reason and never excuses the instruction - which is why this pattern
+      // carries no negation guard, and why a negated reason is the commonest way
+      // the barred sentence gets written.
+      "On Chromium it will not come back so use restart-app.",
+      "On Chromium there is never a window so use restart-app.",
       // `call` is the other verb the surfaces use for a tool, and a qualifier
       // before the comma is still one fronted clause.
       "Call restart-app on Chromium.",
