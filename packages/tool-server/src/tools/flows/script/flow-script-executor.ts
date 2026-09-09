@@ -16,8 +16,6 @@ import * as path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { pathToFileURL } from "node:url";
 import {
-  BASH_OUTPUT_ENV,
-  BASH_REASON_ENV,
   configFilePath,
   getAtPath,
   getConfigDefinition,
