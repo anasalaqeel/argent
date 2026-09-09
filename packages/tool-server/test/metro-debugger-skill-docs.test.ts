@@ -15,6 +15,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import { FAILURE_CODES } from "@argent/registry";
 import type { Registry, ToolCapability } from "@argent/registry";
 import { DEBUGGER_NOT_CONNECTED_REASONS } from "@argent/telemetry";
 import { createRestartAppTool } from "../src/tools/restart-app";
@@ -495,5 +496,25 @@ describe("the prose derives what the code decides", () => {
     // taxonomy, and the reason most likely to be retry-looped waits out a full CDP
     // timeout per send.
     pinsOnce(debuggerStatusTool.description, "Follow the guidance field — do not retry in a loop.");
+  });
+
+  it("answers both shapes the runtime_unresponsive row names in its symptom", () => {
+    // That row's symptom column covers two surfaces at once: the `not_connected`
+    // result, which carries `guidance` and a `detail`, and the raw throw from
+    // every other debugger tool, which carries neither. A recovery written for
+    // only the first sends a reader who arrived by the second looking for fields
+    // that are not on their error, and misprices their wait: a throw is one send.
+    const row = readFileSync(FAILURE_SCENARIOS, "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("|") && line.includes("runtime_unresponsive"));
+    const [, , symptom = "", recovery = ""] = (row ?? "").split("|").map((cell) => cell.trim());
+    expect(symptom, "the symptom column names the code the throwing half fails with").toContain(
+      FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
+    );
+    pinsOnce(recovery, "Any other debugger tool throws instead");
+    pinsOnce(recovery, "one send is one timeout");
+    expect(recovery, "and says the throw carries neither field").toMatch(
+      /no `guidance` and no `detail`/
+    );
   });
 });
