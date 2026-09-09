@@ -30,18 +30,6 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
- * One of the detail's three branches - no pause reported, and Debugger off, so
- * its absence is not evidence - asks the user which state the app is in. On
- * Chromium the answer above leaves that ask with no decision in it: the recovery
- * there is the user's own quit, made in front of the app. The Metro arm does not
- * use this, because there the ask still decides whether to restart-app, and a
- * restart discards a session another debugger has stopped.
- */
-const DETAIL_ASK_IS_ANSWERED =
-  "Where the detail asks the user to check which state the app is in, the sentence above " +
-  "answers it, so skip that. ";
-
-/**
  * Only the Metro connect enables Debugger, so only there can the detail report a
  * pause. It did not cause this reason, but it does mean the user is stopped in a
  * debug session that the restart below would discard — so the restart yields to
@@ -166,18 +154,22 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "port answered, so the flag was passed. " +
     "'Chromium CDP discovery: GET': the discovery request itself. 'could not connect' means " +
     "nothing answered that port — consistent with an exit, not proof of one. 'failed (HTTP " +
-    "<status>)' or 'returned a body that is not valid JSON' means something that is not CDP " +
-    "holds the port, which no relaunch on that port clears: pass that on, and relaunch onto " +
-    "a free one. " +
+    "<status>)', 'returned a body that is not valid JSON' or 'did not return a target list' " +
+    "means something that is not CDP holds the port, which no relaunch on that port clears: " +
+    "pass that on, and relaunch onto a free one. " +
     "Neither phrase: the socket failed after discovery had answered, so the app was up " +
     "moments ago and may have lost only the page it was driving. Have the user check it. " +
     CHROMIUM_RELAUNCH,
   runtime_unresponsive:
     "The app accepted the debugger connection but did not answer within the timeout: the " +
-    "renderer is frozen. A renderer paused at a breakpoint does not reach this reason — it " +
-    "answers the viewport read, the one send on this path that is not swallowed, so the " +
-    "session resolves and debugger-status reports connected. " +
-    DETAIL_ASK_IS_ANSWERED +
+    "renderer is frozen, or it is stopped where the viewport read cannot get past. A " +
+    "renderer already stopped at a breakpoint answers that read — it is the one send on " +
+    "this path that is not swallowed, and the inspector answers it while the JS thread is " +
+    "held, so that session resolves and debugger-status reports connected. A pause another " +
+    "debugger armed but that has not landed yet is the exception: it lands on this read, " +
+    "and the read is what waits. So do the detail's check before quitting anything — the " +
+    "quit below throws away a debug session the user is sitting in, and this reason cannot " +
+    "tell you on its own whether they are. " +
     "Do not retry in a loop: the five priming sends and the viewport read are awaited in " +
     "sequence and each waits out its own 10s timeout, so an attempt costs about a " +
     "minute, not one timeout. " +

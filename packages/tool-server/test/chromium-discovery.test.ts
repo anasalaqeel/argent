@@ -12,7 +12,7 @@ import {
   trackChromiumPort,
   untrackChromiumPort,
 } from "../src/utils/chromium-discovery";
-import { listPageTargets } from "../src/chromium-server/cdp-session";
+import { listPageTargets, discoverPrimaryPage } from "../src/chromium-server/cdp-session";
 import { classifyNotConnected } from "../src/tools/debugger/not-connected";
 
 interface FakeCdpServer {
@@ -272,6 +272,30 @@ describe("port persistence across tool-server restarts", () => {
       expect(classifyNotConnected(err), "and reaches a reason with a recovery").toBe(
         "cdp_unreachable"
       );
+    } finally {
+      await server.close();
+    }
+  });
+
+  it.each([
+    ["a null entry", [null]],
+    ["an entry that is not an object", ["page"]],
+    ["a page entry with no url", [{ id: "a", type: "page", webSocketDebuggerUrl: "ws://x" }]],
+    ["a page entry with no socket", [{ id: "a", type: "page", url: "http://a/" }]],
+  ])("drops %s rather than dereferencing it", async (_what, list) => {
+    // The array check upstream settles the top level only; every field the filter
+    // reads comes from the same untrusted body. An entry Argent cannot read is
+    // one it cannot drive, so dropping it lands on "no page target" - a reason
+    // the recovery routes - instead of a TypeError that classifies as nothing.
+    const server = await startFakeCdpServer({ responses: { list } });
+    try {
+      await expect(listPageTargets(server.port)).resolves.toEqual([]);
+      const err = await discoverPrimaryPage(server.port).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET);
+      expect(classifyNotConnected(err)).toBe("cdp_unreachable");
     } finally {
       await server.close();
     }

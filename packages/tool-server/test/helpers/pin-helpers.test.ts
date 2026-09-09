@@ -139,6 +139,11 @@ describe("expectNoForbiddenAdvice", () => {
       "`restart-app` is not supported on Chromium — on iOS / Android / Vega it is only hung, " +
         "so use `restart-app`.",
       "| Relaunch | refused on Chromium | iOS / Android hang, so use restart-app |",
+      // The same two boundaries with no platform word in them, so nothing but the
+      // cell and the line can be what keeps them clean - the pair above is
+      // excused by the platform first and says nothing about either.
+      "| Chromium | the window is the user's | it is only hung, so use restart-app |",
+      "refused on Chromium\n\nWhen the runtime is only hung, so use restart-app.",
       // The shape the recovery tables are actually written in: the tool in one
       // cell and the platform it is refused on in the next. A cell boundary is a
       // column boundary, so nothing carries across it.
@@ -225,6 +230,8 @@ describe("expectNoForbiddenAdvice", () => {
       "Reuse the id you already have — the app was relaunched on a new port.",
       "On Chromium, call restart-app.",
       "On Chromium it never stops one, so call restart-app.",
+      // The same sentence as the two accepted above with the boundary taken out.
+      "On Chromium the quit is the user's, so use restart-app.",
       "On Chromium browsers, use restart-app.",
       "Use restart-app there, on Chromium.",
     ])

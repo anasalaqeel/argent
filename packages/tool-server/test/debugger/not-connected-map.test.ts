@@ -233,18 +233,18 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       );
     }
 
-    // Only the Chromium arm closes that ask. Its recovery is the user's own quit,
-    // made in front of the app, so nothing is left for the ask to decide.
-    expect(chromiumGuidance, "closes the detail's ask").toContain(
-      "Where the detail asks the user to check which state the app is in, the sentence " +
-        "above answers it, so skip that"
-    );
-    // The Metro arm must not: that branch of the detail is the one where a pause
-    // would not have been announced, and there the ask still decides whether to
-    // restart-app - which throws away a session another debugger has stopped.
-    expect(metroGuidance, "does not close an ask that still decides the restart").not.toContain(
-      "so skip that"
-    );
+    // Neither arm may close that ask. On Metro it decides the restart-app; on
+    // Chromium it decides the quit. Both destroy a session another debugger is
+    // stopped in, and in neither arm does anything above the ask settle whether
+    // the app is in one - so the sentence that told the reader to skip it is in
+    // neither, and its absence is what each arm's own check below rests on.
+    for (const [where, guidance] of [
+      ["metro", metroGuidance],
+      ["chromium", chromiumGuidance],
+    ] as const)
+      expect(guidance, `${where}: does not close an ask that still decides`).not.toContain(
+        "so skip that"
+      );
 
     // Only the Metro connect sends Debugger.enable, so only its detail can report
     // a pause - and there the restart has to yield to it. One restart sentence,
@@ -326,16 +326,28 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     // The Metro arm may not take up its twin's platform: appended, "The same applies
     // on Chromium" points a Chromium reader at restart-app, which the gate refuses.
     expect(guidance, "the Metro arm names no Chromium remedy").not.toMatch(/chromium/i);
-    // Chromium may make the stronger claim, because there the discriminator is
-    // real: readViewport issues an un-awaited Runtime.evaluate, which a paused V8
-    // answers and a frozen one does not (measured on Chrome 152, Debugger.paused
-    // observed: every connect send answers in under 4ms).
+    // Chromium's discriminator is real but partial: readViewport's Runtime.evaluate
+    // is answered by the inspector while the JS thread is held, so a renderer
+    // ALREADY stopped resolves the session (measured on Chrome 152, Debugger.paused
+    // observed: every connect send answers in under 4ms). An armed-but-unlanded
+    // Debugger.pause is the exception - it lands on that same read, and the read
+    // waits it out (measured, same Chrome: 10001ms). So the arm may claim the
+    // first and must not turn it into a blanket "not paused": the quit it routes
+    // to is what destroys the session.
     const { guidance: chromiumGuidance } = chromium(
       "runtime_unresponsive",
       FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
     );
     pinsOnce(chromiumGuidance, "the renderer is frozen");
-    expect(chromiumGuidance).toContain("it answers the viewport read");
+    expect(chromiumGuidance, "keeps the discriminator").toContain(
+      "A renderer already stopped at a breakpoint answers that read"
+    );
+    expect(chromiumGuidance, "and names the shape it does not cover").toContain(
+      "A pause another debugger armed but that has not landed yet is the exception"
+    );
+    expect(chromiumGuidance, "so the check happens before the quit").toContain(
+      "do the detail's check before quitting anything"
+    );
   });
 });
 
