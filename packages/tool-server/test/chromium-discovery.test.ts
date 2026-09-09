@@ -5,12 +5,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { AddressInfo } from "node:net";
 import { scopeTempHome } from "./helpers/temp-home";
+import { FAILURE_CODES, getFailureSignal } from "@argent/registry";
 import {
   discoverChromiumDevices,
   getCandidateChromiumPorts,
   trackChromiumPort,
   untrackChromiumPort,
 } from "../src/utils/chromium-discovery";
+import { listPageTargets } from "../src/chromium-server/cdp-session";
+import { classifyNotConnected } from "../src/tools/debugger/not-connected";
 
 interface FakeCdpServer {
   port: number;
@@ -251,5 +254,26 @@ describe("port persistence across tool-server restarts", () => {
     trackChromiumPort(43213);
     portsToCleanup.push(43213);
     expect(JSON.parse(fs.readFileSync(TEST_PORTS_FILE, "utf8"))).toContain(43213);
+  });
+
+  it("classifies a squatter that answers a target list of the wrong shape", async () => {
+    // fetchJson only rejects a body that is not JSON at all, so a service on the
+    // debug port that answers 200 with a valid JSON object gets past it and meets
+    // an array method. A raw TypeError there classifies as nothing, and
+    // debugger-status rethrows instead of reporting the state.
+    const server = await startFakeCdpServer({ responses: { list: { status: "ok" } } });
+    try {
+      const err = await listPageTargets(server.port).then(
+        () => undefined,
+        (e: unknown) => e
+      );
+      expect(err, "the wrong shape is a failure, not a TypeError").toBeInstanceOf(Error);
+      expect(getFailureSignal(err)?.error_code).toBe(FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE);
+      expect(classifyNotConnected(err), "and reaches a reason with a recovery").toBe(
+        "cdp_unreachable"
+      );
+    } finally {
+      await server.close();
+    }
   });
 });

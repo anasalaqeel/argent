@@ -276,12 +276,10 @@ export class CDPClient {
       const frame = (raw ?? {}) as { location?: { lineNumber?: unknown; scriptId?: unknown } };
       const scriptId = frame.location?.scriptId;
       const own = (raw as { url?: unknown })?.url;
-      // "" is the id every script with an unusable one is filed under, so it
-      // resolves to whichever of them landed last - a file the pause is not in.
       const url =
         typeof own === "string" && own
           ? own
-          : typeof scriptId === "string" && scriptId
+          : typeof scriptId === "string"
             ? this.scripts.get(scriptId)?.url
             : undefined;
 
@@ -583,8 +581,13 @@ export class CDPClient {
       // arrives on is shared with whatever else is debugging the app.
       const str = (v: unknown) => (typeof v === "string" ? v : undefined);
       const num = (v: unknown) => (typeof v === "number" ? v : 0);
+      // Both consumers key on the id, so filing a script whose id is unusable
+      // under one placeholder makes every such script the same script - and a
+      // later lookup of that key answers with whichever landed last.
+      const scriptId = str(params.scriptId);
+      if (!scriptId) return;
       const script: ScriptInfo = {
-        scriptId: str(params.scriptId) ?? "",
+        scriptId,
         url: str(params.url) ?? "",
         sourceMapURL: str(params.sourceMapURL),
         startLine: num(params.startLine),

@@ -12,12 +12,14 @@ import { expect } from "vitest";
  * one deleted negation fires on its own synthetic mutation and on nothing else,
  * while turning correct prose red.
  */
-const NEGATION = String.raw`(?:do(?:es|id)?n't |do(?:es|id)? not |cannot |can't |could not |couldn't |must not |mustn't |should not |shouldn't |will not |won't |never |no longer |rather than |is not |isn't |are not |aren't |was not |wasn't |were not |weren't |not )`;
+const NEGATION = String.raw`(?:doesn't |don't |didn't |does not |do not |did not |cannot |can't |could not |couldn't |must not |mustn't |should not |shouldn't |will not |won't |never |no longer |rather than |is not |isn't |are not |aren't |was not |wasn't |were not |weren't |not )`;
 // One character of the run between a guard and what it guards. It may not cross
 // into another clause, in either direction: one clause over, a negation is about
 // a different claim, and so is a platform. Every separator this repo writes a
-// clause break with, the comma and all three of its dashes included.
-const SAME_CLAUSE = String.raw`(?:(?! - )[^.,;:—–()\[\]\n])`;
+// clause break with, the comma and all three of its dashes included - and the
+// table pipe, because every caller hands this a whole line and most of the
+// recovery surfaces are tables, where the next cell is a different column.
+const SAME_CLAUSE = String.raw`(?:(?! - )[^.,;:—–()\[\]\n|])`;
 // The negation is not always against the verb ("it is not enough to just
 // relaunch it"), so the guard reaches over the words between them. Without the
 // clause limit the recovery's own vocabulary excuses the sentence it introduces:
@@ -34,6 +36,16 @@ const WITHIN_CLAUSE = String.raw`(?:${SAME_CLAUSE}{0,40}|${SAME_CLAUSE}{0,20},\s
 // only hung, so use restart-app" is the rule stated correctly, and it is the
 // shape every surface that carries the refusal has to write.
 const OTHER_PLATFORM = String.raw`(?:ios|android|vega|apple|simulator|emulator)`;
+// What is barred is booting an app that is still up, and reusing an id across a
+// relaunch - not the boot after a confirmed exit, or the id of an app that never
+// relaunched, both of which are steps the recovery itself prescribes. The
+// qualifier that makes them correct is a fact about the app, so it sits in a
+// clause of its own: before the boot, after the id. Only the phrases that assert
+// it, never the bare word - "the exit cannot be confirmed" names an exit too.
+const EXIT_CONFIRMED = String.raw`(?:confirms? the exit|confirmed the exit|has exited|it exited|the exit is confirmed|once it is gone)[^.
+]{0,24}`;
+const NEVER_RELAUNCHED = String.raw`[^.
+]{0,80}(?:never exited|has not exited|did not exit|still (?:up|running|on that port)|only lacks a window)`;
 
 const FORBIDDEN: [RegExp, string][] = [
   // `anyway` is one wording of it; the rest are what a shortening rewrite
@@ -60,14 +72,16 @@ const FORBIDDEN: [RegExp, string][] = [
   ],
   [
     new RegExp(
-      String.raw`(?<!${NEGATED})(?:keep using|reuse|re-use) (?:it|the old|that|the|your) `,
+      String.raw`(?<!${NEGATED})(?:keep using|reuse|re-use) (?:it|the old|that|the|your) ` +
+        String.raw`(?!${NEVER_RELAUNCHED})`,
       "i"
     ),
     "reusing an id across a relaunch",
   ],
   [
     new RegExp(
-      String.raw`(?<!${NEGATED})(?:boot|launch) (?:it|the app) again|(?<!${NEGATED})call boot-device again`,
+      String.raw`(?<!${NEGATED})(?<!${EXIT_CONFIRMED})(?:boot|launch) (?:it|the app) again|` +
+        String.raw`(?<!${NEGATED})(?<!${EXIT_CONFIRMED})call boot-device again`,
       "i"
     ),
     "booting an app that is still up",
@@ -81,7 +95,7 @@ const FORBIDDEN: [RegExp, string][] = [
   ],
   [
     new RegExp(
-      String.raw`(?<!${NEGATED})(?:relaunch(?:ed)? (?:it |the app )?with|\b(?:use|call)) ` +
+      String.raw`(?<!${NEGATED})(?:relaunch(?:ed)? (?:it |the app )?with|\b(?:use|call|try)) ` +
         String.raw`\`?restart-app\`?${WITHIN_CLAUSE}chromium`,
       "i"
     ),
@@ -90,7 +104,7 @@ const FORBIDDEN: [RegExp, string][] = [
   [
     new RegExp(
       String.raw`chromium${WITHIN_CLAUSE}(?<!${NEGATED})` +
-        String.raw`(?:relaunch(?:ed)? (?:it |the app )?with|\b(?:use|call)) \`?restart-app`,
+        String.raw`(?:relaunch(?:ed)? (?:it |the app )?with|\b(?:use|call|try)) \`?restart-app`,
       "i"
     ),
     "restart-app on Chromium",

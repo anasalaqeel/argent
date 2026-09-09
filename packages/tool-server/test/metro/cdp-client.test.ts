@@ -2,10 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { WebSocketServer, WebSocket } from "ws";
 import { FAILURE_CODES, getFailureSignal, type Registry } from "@argent/registry";
 import { createRestartAppTool } from "../../src/tools/restart-app";
+import { createDebuggerStatusTool } from "../../src/tools/debugger/debugger-status";
 import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
 import { pinsOnce } from "../helpers/pins";
 import { platformTag } from "../helpers/platform-tag";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
+
+const debuggerStatusTool = createDebuggerStatusTool({} as unknown as Registry);
 
 let wss: WebSocketServer;
 let port: number;
@@ -160,10 +163,11 @@ describe("CDPClient", () => {
     await client.disconnect();
   });
 
-  it("does not resolve a frame's empty scriptId to a script filed under one", async () => {
-    // A script whose own id was unusable is stored under "", and "" is a string -
-    // so a frame carrying one would read back that script's url and name a file
-    // the pause is not in.
+  it("files no script under an id it could not read", async () => {
+    // Both consumers of the map key on the id, so a placeholder for the ones that
+    // have none makes every such script the same script - and a frame carrying
+    // that placeholder reads back whichever landed last, naming a file the pause
+    // is not in.
     const client = new CDPClient(`ws://127.0.0.1:${port}`);
     const connected = client.connect();
     const ws = await waitForServer();
@@ -192,6 +196,7 @@ describe("CDPClient", () => {
       "The session reported a pause at a breakpoint,"
     );
     expect(err.message, "and never the file it is not in").not.toContain("unrelated.js");
+    expect(client.getLoadedScripts().size, "and nothing was filed").toBe(0);
     await client.disconnect();
   });
 
@@ -631,6 +636,16 @@ describe("CDPClient", () => {
       );
       expect(message, "states no unscoped debugger-status claim").not.toMatch(
         /debugger-status can still report "connected" in this state/
+      );
+      // The fact itself is still true of the OTHER timeout this message serves -
+      // one on an established session, where nothing says not_connected - so it
+      // has to be somewhere. Its home is the tool whose answer misleads, where it
+      // reads correctly on both surfaces.
+      pinsOnce(
+        debuggerStatusTool.description,
+        `A ${FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT} from another debugger tool does not ` +
+          `move this answer: the check is the socket, and a runtime that hangs behind an open ` +
+          `one still reports "connected".`
       );
       // Both ends of the retry discipline. Each attempt waits out this full timeout,
       // so a loosened "unless it looks slow" at one end or a "retry until it answers"

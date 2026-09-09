@@ -109,7 +109,19 @@ describe("expectNoForbiddenAdvice", () => {
       "This is because `restart-app` is refused on Chromium.",
       "The refusal exists because restart-app cannot stop a Chromium app.",
       "Never boot the app again while it is up.",
+      // The two steps the recovery itself prescribes, which the bars are worded
+      // one qualifier away from catching: the boot AFTER a confirmed exit, and
+      // the id of an app that never relaunched.
+      "Once the user confirms the exit, boot the app again with boot-device and electronAppPath.",
+      "After it has exited, launch the app again.",
+      "Reuse the id you already have: the app is still on that port and only lacks a window.",
+      "Keep using the same chromium-cdp-<port> id — the app never exited.",
       "A missing entry does not show the app exited.",
+      // Every contraction and long form of the negation, because a list that
+      // spells one of them wrong turns the correct prose using it red.
+      "The agent didn't just relaunch the app.",
+      "The agent doesn't just relaunch the app.",
+      "The agent did not just relaunch the app.",
       "Do not ignore that guidance.",
       // A refusal standing between the tool and the platform is how every
       // surface states the rule, in each of the shapes they write it.
@@ -127,6 +139,11 @@ describe("expectNoForbiddenAdvice", () => {
       "`restart-app` is not supported on Chromium — on iOS / Android / Vega it is only hung, " +
         "so use `restart-app`.",
       "| Relaunch | refused on Chromium | iOS / Android hang, so use restart-app |",
+      // The shape the recovery tables are actually written in: the tool in one
+      // cell and the platform it is refused on in the next. A cell boundary is a
+      // column boundary, so nothing carries across it.
+      "| Restart an app | use `restart-app` | not supported on Chromium |",
+      "| Relaunch | use restart-app | refused on Chromium, the quit is the user's |",
       "not supported on Chromium\n\nOn iOS / Android / Vega it is hung, so use restart-app.",
       "On Chromium it is not relaunched with restart-app, so do not call restart-app.",
     ])
@@ -202,6 +219,10 @@ describe("expectNoForbiddenAdvice", () => {
       // `call` is the other verb the surfaces use for a tool, and a qualifier
       // before the comma is still one fronted clause.
       "Call restart-app on Chromium.",
+      "Try restart-app on Chromium.",
+      // A named exit is not a confirmed one, and a named window is not a live app.
+      "The exit cannot be confirmed, so boot the app again.",
+      "Reuse the id you already have — the app was relaunched on a new port.",
       "On Chromium, call restart-app.",
       "On Chromium it never stops one, so call restart-app.",
       "On Chromium browsers, use restart-app.",

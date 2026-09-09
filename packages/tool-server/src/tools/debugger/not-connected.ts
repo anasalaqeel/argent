@@ -31,8 +31,11 @@ export interface DebuggerNotConnectedResult {
 
 /**
  * One of the detail's three branches - no pause reported, and Debugger off, so
- * its absence is not evidence - asks the user which state the app is in. Both
- * arms answer that above, so there the ask is a step with no decision left in it.
+ * its absence is not evidence - asks the user which state the app is in. On
+ * Chromium the answer above leaves that ask with no decision in it: the recovery
+ * there is the user's own quit, made in front of the app. The Metro arm does not
+ * use this, because there the ask still decides whether to restart-app, and a
+ * restart discards a session another debugger has stopped.
  */
 const DETAIL_ASK_IS_ANSWERED =
   "Where the detail asks the user to check which state the app is in, the sentence above " +
@@ -77,12 +80,13 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "thread, and the two that do wait on the JS thread are both swallowed, so the " +
     "session resolves and debugger-status reports connected. What timed out is one of " +
     "those inspector-answered sends, so the inspector itself has stopped answering. " +
-    DETAIL_ASK_IS_ANSWERED +
     DETAIL_MAY_NAME_A_PAUSE +
     "Do not retry in a loop: the sends are awaited in sequence and each waits out its " +
     "own 10s timeout, so an attempt costs 20-30s — two on a session shared with another " +
-    "debugger, three otherwise — not one timeout. If the detail reports no pause, restart " +
-    "it (restart-app), then retry once.",
+    "debugger, three otherwise — not one timeout. Where the detail says a pause would not " +
+    "have been announced, its silence is not a no: have the user check the app, get it " +
+    "resumed if it is stopped, and restart it (restart-app) only if it is not. Then retry " +
+    "once.",
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. Restart the app " +
     "(restart-app) if it is not running, then call debugger-connect — the next call " +
@@ -114,6 +118,12 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   // occupant, so it must not escape as a thrown tool failure.
   [FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE]: "cdp_unreachable",
   [FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET]: "cdp_unreachable",
+  // The session is up and the page answered, but its main world is gone - a
+  // navigation in flight, or a window closing under the read. Same recovery as
+  // the reasons above, and the ChromiumCdp resolve runs it, so leaving it out
+  // is debugger-status throwing on a state its own description promises to
+  // report.
+  [FAILURE_CODES.CHROMIUM_VIEWPORT_READ_FAILED]: "cdp_unreachable",
   [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING]: "reconnecting",
 };
 

@@ -32,10 +32,31 @@ export async function ensureCdpReachable(
  * is roughly most-recently-focused first.
  */
 export async function listPageTargets(port: number, signal?: AbortSignal): Promise<CdpTarget[]> {
-  const targets = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
+  const targets = await fetchTargetList(port, signal);
   return targets.filter(
     (t) => t.type === "page" && !!t.webSocketDebuggerUrl && !t.url.startsWith("devtools://")
   );
+}
+
+/**
+ * `/json/list`, checked for the one thing every caller does with it. A squatter
+ * that answers valid JSON of another shape gets past `fetchJson`, and the array
+ * method that meets it next throws a TypeError no failure code classifies —
+ * escaping the reached-but-malformed class this belongs to.
+ */
+async function fetchTargetList(port: number, signal?: AbortSignal): Promise<CdpTarget[]> {
+  const url = `http://127.0.0.1:${port}/json/list`;
+  const body = await fetchJson<unknown>(url, signal);
+  if (!Array.isArray(body))
+    throw new FailureError(`Chromium CDP discovery: GET ${url} did not return a target list`, {
+      error_code: FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE,
+      failure_stage: "chromium_cdp_discovery_parse",
+      failure_area: "tool_server",
+      error_kind: "network",
+      failure_command: "cdp",
+      network_failure: "invalid_response",
+    });
+  return body as CdpTarget[];
 }
 
 /**
@@ -48,7 +69,7 @@ export async function discoverPrimaryPage(port: number, signal?: AbortSignal): P
   const pages = await listPageTargets(port, signal);
   if (pages.length === 0) {
     // Re-fetch unfiltered to tell "no pages" from "only devtools://".
-    const all = await fetchJson<CdpTarget[]>(`http://127.0.0.1:${port}/json/list`, signal);
+    const all = await fetchTargetList(port, signal);
     if (all.some((t) => t.type === "page")) {
       throw new FailureError(
         `Chromium CDP on port ${port} has only devtools:// pages (the main BrowserWindow may be hidden or closed). ` +

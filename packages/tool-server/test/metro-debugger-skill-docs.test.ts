@@ -291,6 +291,28 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
     );
   });
 
+  it("sweeps whole files, so advice one line off a pinned row is still caught", () => {
+    // Everything above hands the check a single row or a tool description, which
+    // leaves the rest of each file unread - and the recovery's largest blocks are
+    // paragraphs, not rows. Every pattern stops at a newline, so a whole file is
+    // the same check run once per line; the loop is only for the line number.
+    for (const file of [
+      DEBUGGER_SKILL,
+      FAILURE_SCENARIOS,
+      DEVICE_INTERACT_SKILL,
+      CHROMIUM_REFERENCE,
+      CREATE_FLOW_RECOVERY,
+      ARGENT_RULE,
+      TOOLS_REFERENCE,
+      DEBUGGING_FEATURE,
+      INTERACTING_FEATURE,
+    ]) {
+      readFileSync(file, "utf8")
+        .split("\n")
+        .forEach((line, i) => expectNoForbiddenAdvice(line, `${path.basename(file)}:${i + 1}`));
+    }
+  });
+
   it("does not offer launch-app as a way to start a Chromium app", () => {
     // launch-app's handler is a no-op that returns launched: true, and the runtime
     // guidance fences it by name — an unqualified "Always" on these surfaces
@@ -597,8 +619,8 @@ describe("the prose derives what the code decides", () => {
     // on Metro can report a pause the guidance defers to - for the reader to guess.
     pinsOnce(
       recovery,
-      "answers the `detail`'s ask where it makes one — and on Metro yields to that detail " +
-        "where it reports a pause"
+      "on Metro it defers to that detail instead — both where the detail reports a pause " +
+        "and where it says one would not have been announced"
     );
     expect(recovery, "and says the throw carries neither field").toMatch(
       /no `guidance` and no `detail`/

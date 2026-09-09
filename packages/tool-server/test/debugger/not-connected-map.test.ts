@@ -59,6 +59,10 @@ const MAP: Array<[FailureSignal["error_code"], string]> = [
   [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE, "cdp_unreachable"],
   [FAILURE_CODES.CHROMIUM_CDP_INVALID_RESPONSE, "cdp_unreachable"],
   [FAILURE_CODES.CHROMIUM_CDP_NO_PAGE_TARGET, "cdp_unreachable"],
+  // readViewport runs inside createChromiumServer, so this one is thrown on the
+  // ChromiumCdp resolve like the three above it - unmapped, debugger-status
+  // rethrows it instead of reporting the state its description promises.
+  [FAILURE_CODES.CHROMIUM_VIEWPORT_READ_FAILED, "cdp_unreachable"],
   [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING, "reconnecting"],
 ];
 
@@ -188,8 +192,8 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     // do, and the Metro arm's was held by nothing.
     pinsOnce(
       metro().guidance,
-      `If the detail reports no pause, restart it ` +
-        `(${createRestartAppTool({} as unknown as Registry).id}), then retry once.`
+      `restart it (${createRestartAppTool({} as unknown as Registry).id}) only if it is not. ` +
+        `Then retry once.`
     );
     pinsOnce(
       chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT).guidance,
@@ -222,21 +226,25 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       ["metro", metroGuidance],
       ["chromium", chromiumGuidance],
     ] as const) {
-      // Both arms answer the ask above, so passing it on is a step with no
-      // decision left in it - and only one of the detail's three branches makes
-      // it, so the sentence has to say where. Unscoped it is false of the two it
-      // is not about, one of which is the branch the Metro arm's next sentence
-      // exists for.
-      expect(guidance, `${where}: closes the detail's ask, where it makes one`).toContain(
-        "Where the detail asks the user to check which state the app is in, the sentence " +
-          "above answers it, so skip that"
-      );
-      // And neither raises a resume of its own: nothing in the catalogue can
-      // resume a paused runtime, so a resume ask here has no tool behind it.
+      // Neither raises a resume of its own: nothing in the catalogue can resume a
+      // paused runtime, so a resume ask here has no tool behind it.
       expect(guidance, `${where}: no resume ask of its own`).not.toMatch(
         /ask (the user|them) to resume/i
       );
     }
+
+    // Only the Chromium arm closes that ask. Its recovery is the user's own quit,
+    // made in front of the app, so nothing is left for the ask to decide.
+    expect(chromiumGuidance, "closes the detail's ask").toContain(
+      "Where the detail asks the user to check which state the app is in, the sentence " +
+        "above answers it, so skip that"
+    );
+    // The Metro arm must not: that branch of the detail is the one where a pause
+    // would not have been announced, and there the ask still decides whether to
+    // restart-app - which throws away a session another debugger has stopped.
+    expect(metroGuidance, "does not close an ask that still decides the restart").not.toContain(
+      "so skip that"
+    );
 
     // Only the Metro connect sends Debugger.enable, so only its detail can report
     // a pause - and there the restart has to yield to it. One restart sentence,
@@ -249,8 +257,14 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       metroGuidance.match(/restart it \(restart-app\)/gi) ?? [],
       "exactly one restart instruction, and it is the conditioned one"
     ).toEqual(["restart it (restart-app)"]);
-    expect(metroGuidance, "conditioned on the detail").toContain(
-      "If the detail reports no pause, restart it (restart-app)"
+    // Conditioned on the app, not on the detail: in the branch that reaches here
+    // the detail reports no pause precisely because nothing would have announced
+    // one, so reading that as "not paused" is what sends the restart through.
+    expect(metroGuidance, "reads the detail's silence as silence").toContain(
+      "Where the detail says a pause would not have been announced, its silence is not a no"
+    );
+    expect(metroGuidance, "and restarts only on the answer").toContain(
+      "restart it (restart-app) only if it is not"
     );
 
     // The Chromium arm states no pause conditional at all: its own first sentence
@@ -360,13 +374,19 @@ describe("both Chromium overrides carry the whole recovery", () => {
     pinsOnce(guidance, "Then retry once.", reason);
 
     // The order, not the wording: a relaunch-first rewrite keeps every needle
-    // above while telling the reader to relaunch into a running app.
+    // above while telling the reader to relaunch into a running app. Both
+    // branches, or the rewrite just moves whichever one is unpinned.
     const lower = guidance.toLowerCase();
     const quitAt = lower.indexOf("ask the user to quit it and wait for the exit");
     expect(quitAt, `${reason}: names the quit as an instruction`).toBeGreaterThan(-1);
-    expect(quitAt, `${reason}: quit must precede any relaunch`).toBeLessThan(
-      lower.indexOf("then boot-device with electronapppath")
-    );
+    for (const relaunch of [
+      "then boot-device with electronapppath",
+      "start the browser again with --remote-debugging-port",
+    ]) {
+      const at = lower.indexOf(relaunch);
+      expect(at, `${reason}: names the relaunch "${relaunch}"`).toBeGreaterThan(-1);
+      expect(quitAt, `${reason}: quit must precede "${relaunch}"`).toBeLessThan(at);
+    }
   });
 
   it("names the probe set discovery actually has, not a restated one", async () => {
