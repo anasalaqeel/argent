@@ -559,6 +559,15 @@ describe("the prose derives what the code decides", () => {
     // on exactly the call where it is not.
     pinsOnce(recovery, "its debugger service resolves before the tool runs");
     pinsOnce(recovery, "Once a session is up, one send is one timeout");
+    // What the reader does with the two fields when both arrive. Without it the
+    // row names a `guidance` field and leaves its relationship to the `detail`
+    // beside it - which asks the user a question the guidance answers, and which
+    // on Metro can report a pause the guidance defers to - for the reader to guess.
+    pinsOnce(
+      recovery,
+      "answers the question the `detail` beside it puts to the user — and on Metro yields " +
+        "to that detail where it reports a pause"
+    );
     expect(recovery, "and says the throw carries neither field").toMatch(
       /no `guidance` and no `detail`/
     );

@@ -106,12 +106,19 @@ describe("CDPClient", () => {
   // so a malformed frame list takes the process down instead of one call. A
   // number is not iterable; a null element is iterable and then dereferenced.
   it.each([
-    ["a non-iterable callFrames", 42],
-    ["a null frame", [null]],
-    ["a non-string url", [{ url: 42 }]],
-    ["an object url", [{ url: {} }]],
-    ["a non-numeric lineNumber", [{ url: "http://a/b", location: { lineNumber: "7" } }]],
-  ])("survives %s on Debugger.paused", async (_what, callFrames) => {
+    ["a non-iterable callFrames", 42, ""],
+    ["a null frame", [null], ""],
+    ["a non-string url", [{ url: 42 }], ""],
+    ["an object url", [{ url: {} }], ""],
+    // The one shape that still yields a place: the url is a string, so it is
+    // named - and the line is not a number, so no line is appended to it. The
+    // un-checked form reads "http://a/b:71", a line that is not in the file.
+    [
+      "a non-numeric lineNumber",
+      [{ url: "http://a/b", location: { lineNumber: "7" } }],
+      " at http://a/b",
+    ],
+  ])("survives %s on Debugger.paused", async (_what, callFrames, where) => {
     const client = new CDPClient(`ws://127.0.0.1:${port}`);
     const connected = client.connect();
     const ws = await waitForServer();
@@ -128,12 +135,12 @@ describe("CDPClient", () => {
     expect(getFailureSignal(err)).toMatchObject({
       error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
     });
-    // Still reports the pause. A location is only offered where every field it is
-    // built from was the type it is read as; nothing else is guessed at.
+    // Still reports the pause, and offers exactly the part of the location every
+    // field it is built from was the type it is read as.
     expect(err.message, "names the pause").toContain(
-      "The session reported a pause at a breakpoint"
+      `The session reported a pause at a breakpoint${where},`
     );
-    expect(err.message, "and no line it could not read").not.toMatch(/:NaN|:7undefined|:\[object/);
+    expect(err.message, "and appends no line it could not read").not.toMatch(/http:\/\/a\/b:/);
     await client.disconnect();
   });
 
