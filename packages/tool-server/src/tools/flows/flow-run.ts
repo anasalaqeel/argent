@@ -516,9 +516,12 @@ async function androidDevtoolsReady(registry: Registry, device: DeviceInfo): Pro
  * successful launch pins later tree reads to this bundle
  * ({@link FlowTreeTarget}), so the read no longer has to agree with
  * auto-targeting about which app is frontmost — but the pin only names the app,
- * it does not prove the app can serve a hierarchy. This wait is what proves
- * that, so a launch that skips it hands the next selector step a pin to a
- * process whose tree source is not up yet.
+ * it does not prove the app can serve a hierarchy. This wait is the closest
+ * evidence the gate has, so a launch that skips it hands the next selector step
+ * a pin to a process whose tree source is not up yet. It is not a guarantee:
+ * the wait ends on `isConnected`, which simulator-wide injection lets a
+ * `com.apple.*` process satisfy, and the first selector read refuses that pin
+ * anyway (see `queryFullHierarchyTree`).
  */
 async function treeSourceGate(
   registry: Registry,

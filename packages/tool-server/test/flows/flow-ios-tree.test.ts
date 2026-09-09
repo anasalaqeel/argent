@@ -17,15 +17,15 @@ import { evaluateCondition, selectorToFrame } from "../../src/utils/ui-tree-matc
 import { resolveNativeTargetApp } from "../../src/utils/native-target-app";
 import {
   __resetDeviceSetCacheForTesting,
-  deviceSetForUdid,
   rememberDeviceSet,
+  simctlTargetForUdid,
 } from "../../src/utils/ios-device-sets";
 
 // A pass-through spy, so the case below can count which reasons pay for the
 // device-set lookup while every other case keeps the real memo.
 vi.mock("../../src/utils/ios-device-sets", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/utils/ios-device-sets")>();
-  return { ...actual, deviceSetForUdid: vi.fn(actual.deviceSetForUdid) };
+  return { ...actual, simctlTargetForUdid: vi.fn(actual.simctlTargetForUdid) };
 });
 
 const DEVICE = {
@@ -541,6 +541,17 @@ describe("flow iOS full-hierarchy source", () => {
         } as unknown as NativeDevtoolsApi,
       },
       {
+        // The launched app is gone while a sibling still answers the map. The
+        // fan-out still times out, so this is the probe-failure branch with the
+        // one app a relaunch is right for missing from it.
+        branch: "state probe failed, launched app not connected",
+        api: {
+          listConnectedBundleIds: () => ids,
+          getAppState: vi.fn(rpcTimeout),
+        } as unknown as NativeDevtoolsApi,
+        launched: "com.example.under.test",
+      },
+      {
         branch: "target dropped its connection",
         api: (() => {
           let connected = [ids[0]];
@@ -609,12 +620,12 @@ describe("flow iOS full-hierarchy source", () => {
   });
 
   it("resolves the device set only for a reason that offers the terminate command", async () => {
-    // With additional sets configured, a default-set udid matches none of them,
-    // so `deviceSetForUdid` caches no verdict and re-runs the whole
-    // `simctl list devices` sweep on every call. Building the command up front
-    // charged that to every branch, including the four that never quote it - and
-    // a failing `await:` rebuilds its reason once per poll.
-    const lookups = vi.mocked(deviceSetForUdid);
+    // The resolve is not free: an unknown udid re-probes `simctl list devices`
+    // on every call, and it is also where the external-provider `simctl` grant
+    // is checked. Building the command up front charged both to every branch,
+    // including the ones that never quote it - and a failing `await:` rebuilds
+    // its reason once per poll.
+    const lookups = vi.mocked(simctlTargetForUdid);
     // One connection covers the sub-case with nothing to clear: the probe-failure
     // branch offers the command only when a second app is connected.
     for (const appCount of [1, 2]) {
@@ -635,8 +646,9 @@ describe("flow iOS full-hierarchy source", () => {
 
   it("keeps the reason the same size as connections pile up", async () => {
     // The device must not be able to spend the budget. Both list-bearing branches
-    // used to grow per app: the ambiguous one measured 778, 1000 and 1444 chars at
-    // 2, 4 and 8 apps.
+    // used to grow by one ~125-char entry per app: the ambiguous one measures 702
+    // chars at 2 apps, where the cap is inert, and would reach about 950 at 4 and
+    // 1450 at 8.
     for (const branch of ["ambiguous connected set", "state probe failed, connections live"]) {
       const lengths = await Promise.all(
         [2, 4, 16].map(async (appCount) => {
@@ -683,6 +695,57 @@ describe("flow iOS full-hierarchy source", () => {
       (err) => err
     );
     expect(probeError.message).toContain(`Connected: ${LONG_ID}0, ${LONG_ID}1 (+3 more).`);
+  });
+
+  it("drops the terminate advice when the device's provider withholds the simctl grant", async () => {
+    // `simctlTargetForUdid` is that gate: an external provider can grant
+    // native-devtools (so flows read the tree) while withholding `simctl`. A
+    // command argent itself would refuse must not be quoted back, nor the
+    // provider's device-set path with it.
+    vi.mocked(simctlTargetForUdid).mockRejectedValueOnce(
+      new Error("ext:provider:0001 does not grant simctl")
+    );
+    const { api } = targetingFailures(3).find((f) => f.branch === "ambiguous connected set")!;
+
+    const error = await queryFullHierarchyTree(registryFor(api), DEVICE).catch((err) => err);
+
+    expect(error.message).not.toContain("xcrun");
+    expect(error.message).not.toContain("clear the others");
+    // The remedy that needs no simctl still stands, and the sentence still ends.
+    expect(error.message).toContain("Foreground the intended app with launch-app");
+    expect(error.message).toContain("then retry.");
+  });
+
+  it("sends the launched app to restart-app when it is the connection that is missing", async () => {
+    // The advice this PR exists to remove: launch-app does not terminate, so it
+    // cannot instrument an app that is no longer connected. It stays the remedy
+    // only while the launched app IS one of the connected, merely-suspended ones.
+    const gone = targetingFailures(2).find(
+      (f) => f.branch === "state probe failed, launched app not connected"
+    )!;
+    const goneError = await queryFullHierarchyTree(registryFor(gone.api), DEVICE, {
+      bundleId: gone.launched!,
+      pinned: false,
+      probeAnswered: false,
+    }).catch((err) => err);
+
+    expect(goneError.message).toContain(`${gone.launched} — the app this flow launched — is NOT`);
+    expect(goneError.message).toContain("relaunch it with restart-app");
+    expect(goneError.message).not.toContain("foreground the app the flow drives with launch-app");
+
+    // Same branch, launched app present among the connected: the app is only
+    // suspended, so foregrounding it is still the remedy and a relaunch is not.
+    const live = targetingFailures(2).find(
+      (f) => f.branch === "state probe failed, connections live"
+    )!;
+    const liveError = await queryFullHierarchyTree(registryFor(live.api), DEVICE, {
+      bundleId: `${LONG_ID}0`,
+      pinned: false,
+      probeAnswered: false,
+    }).catch((err) => err);
+
+    expect(liveError.message).toContain("foreground the app the flow drives with launch-app");
+    expect(liveError.message).not.toContain("relaunch it with restart-app");
   });
 
   it("reports an unresolvable native-devtools service and keeps the original error", async () => {

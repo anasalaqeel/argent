@@ -147,9 +147,12 @@ function retargetRemedy(idKind: string, condition: WaitCondition): string {
  * readers each show a different projection, so naming one of them would point
  * the author at the wrong tree.
  *
- * On iOS the near miss is also SHALLOWER: `native-full-hierarchy` defaults to
- * `maxDepth: 8` where the runner's read asks for 100, so absent from it does
- * not mean absent from the runner's tree until the depth is raised.
+ * On an iOS SIMULATOR the near miss is also SHALLOWER: `native-full-hierarchy`
+ * defaults to `maxDepth: 8` where the runner's read asks for 100, so absent
+ * from it does not mean absent from the runner's tree until the depth is
+ * raised. A physical device is not covered: `platformOf` reports `ios` for one
+ * too, but its runner reads the XCUITest snapshot, which takes no depth at all,
+ * and `native-full-hierarchy` is simulator-only.
  */
 function runnerSideReadClause(udid: unknown, condition: WaitCondition): string {
   const platform = platformOf(udid);

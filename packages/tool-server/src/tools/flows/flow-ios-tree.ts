@@ -8,7 +8,7 @@ import {
   type NativeDevtoolsApi,
 } from "../../blueprints/native-devtools";
 import { chooseFrontmostConnectedApp, resolveNativeTargetApp } from "../../utils/native-target-app";
-import { deviceSetForUdid, simctlPrefix } from "../../utils/ios-device-sets";
+import { simctlTargetForUdid } from "../../utils/ios-device-sets";
 import { nodeText } from "../../utils/ui-tree-match";
 import { describeIosDevice } from "../describe/platforms/ios-device";
 import type { FlowTreeTarget } from "./flow-actions";
@@ -332,9 +332,10 @@ function systemAppFlowTargetRefusal(bundleId: string): string {
  * fan-out — and re-deciding against the pinned app alone what that fan-out
  * would otherwise have decided.
  *
- * An UNPINNED target is only a hint: auto-resolve decides and its own errors
- * propagate unwrapped, and the hint takes the read solely when that fan-out
- * times out and the hint vouches for itself with a probe of its own.
+ * An UNPINNED target is only a hint: auto-resolve decides, and its errors are
+ * restated by {@link explainTargetingFailure} with a remedy a flow can act on.
+ * The hint takes the read solely when that fan-out times out and the hint
+ * vouches for itself with a probe of its own.
  */
 export async function queryFullHierarchyTree(
   registry: Registry,
@@ -451,8 +452,9 @@ export async function queryFullHierarchyTree(
       throw new Error(await unreadableHierarchyReason(nativeApi, target.bundleId));
     }
     // resolveNativeTargetApp's own errors (no connected app / ambiguous
-    // frontmost) already carry the actionable next step, so they propagate
-    // unwrapped - with one exception. Its `Application.getState` fan-out probes
+    // frontmost) become this read's failure, restated by
+    // `explainTargetingFailure` with the remedy a flow selector step actually
+    // has - with one exception. Its `Application.getState` fan-out probes
     // every connection at once, so one process whose main thread is pinned
     // times the whole resolution out and leaves the read no target at all. ONLY
     // then, and only while the target names an injectable app whose connection
@@ -466,7 +468,7 @@ export async function queryFullHierarchyTree(
     } catch (err) {
       const timedOut =
         getFailureSignal(err)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT;
-      if (!timedOut || !target) throw await explainTargetingFailure(err, nativeApi, device);
+      if (!timedOut || !target) throw await explainTargetingFailure(err, nativeApi, device, target);
       // Checked before the connections list to keep the refusal terminal
       // either way.
       if (!isInjectableBundleId(target.bundleId)) {
@@ -482,7 +484,7 @@ export async function queryFullHierarchyTree(
         );
       }
       if (!nativeApi.listConnectedBundleIds().includes(target.bundleId)) {
-        throw await explainTargetingFailure(err, nativeApi, device);
+        throw await explainTargetingFailure(err, nativeApi, device, target);
       }
       // The timed-out fan-out proved nothing about what is on screen, so the
       // hint must vouch for itself before taking the read. A probe it cannot
@@ -492,7 +494,7 @@ export async function queryFullHierarchyTree(
         hintState = await nativeApi.getAppState(target.bundleId);
       } catch (probeErr) {
         if (getFailureSignal(probeErr)?.error_code === FAILURE_CODES.NATIVE_DEVTOOLS_RPC_TIMEOUT) {
-          throw await explainTargetingFailure(err, nativeApi, device);
+          throw await explainTargetingFailure(err, nativeApi, device, target);
         }
         throw probeErr;
       }
@@ -575,17 +577,28 @@ function errMsg(err: unknown): string {
  * connected app" means the target started outside Argent (Metro/Expo, Xcode, or
  * its home-screen icon) and needs an Argent relaunch.
  *
+ * `launched` is the run's launch hint, when it has one. It is what separates
+ * "an app the flow does not drive went stale" from "the app the flow drives is
+ * gone": the second needs the relaunch the first must not be given.
+ *
  * Returns the error to throw rather than throwing, so each call site reads as
  * the `throw` it is.
  */
 async function explainTargetingFailure(
   err: unknown,
   nativeApi: NativeDevtoolsApi,
-  device: DeviceInfo
+  device: DeviceInfo,
+  launched?: FlowTreeTarget
 ): Promise<Error> {
   const failureCode = getFailureSignal(err)?.error_code;
   if (failureCode === FAILURE_CODES.NATIVE_TARGET_MULTIPLE_APPS_AMBIGUOUS) {
     const terminate = await terminateCommand(device);
+    // Dropped whole when the command may not be offered (see
+    // {@link terminateCommand}); the foreground remedy stands on its own.
+    const clearOthers = terminate
+      ? `; clear the others with \`${terminate}\` (argent has no terminate tool, and restart-app ` +
+        `would just bring that app back to the front).`
+      : `.`;
     // The reason does not offer to background the other apps. They stay
     // connected, so the set stays ambiguous, and iOS then suspends one until it
     // no longer answers the state probe. That turns this failure into the
@@ -596,9 +609,7 @@ async function explainTargetingFailure(
       `could not target an app to read the view hierarchy from:\n` +
         `${cappedAppDiagnostic(withoutExplicitBundleIdAdvice(errMsg(err)))}\n` +
         `Flow selectors auto-target and cannot name a bundleId. Foreground the intended app with ` +
-        `launch-app (it does not terminate), then retry; clear the others with ` +
-        `\`${terminate}\` (argent has no terminate tool, and ` +
-        `restart-app would just bring that app back to the front).`,
+        `launch-app (it does not terminate), then retry${clearOthers}`,
       err
     );
   }
@@ -622,24 +633,39 @@ async function explainTargetingFailure(
   // No verdict at all: resolveNativeTargetApp probes applicationState for every
   // connected app in one Promise.all, so one stale connection rejects the whole
   // read. iOS suspends a backgrounded app after about a second, and a suspended
-  // app stops answering. The connections are still live, so the relaunch advice
-  // below does not apply: a relaunch discards the state the flow built up, and
-  // cannot help when another app is the stale one.
+  // app stops answering. A connection that is still live needs no relaunch - it
+  // discards the state the flow built up, and cannot help when another app is
+  // the stale one - so the relaunch advice is held back for the two states that
+  // earn it: the launched app missing from that live map, and nothing connected
+  // at all.
   const stillConnected = nativeApi.listConnectedBundleIds();
   if (stillConnected.length > 0) {
-    // Say this only when another connection exists to clear, and name a command
-    // that exists: argent has no terminate tool, and restart-app would bring the
-    // other app to the front.
-    const clearOthers =
-      stillConnected.length > 1
-        ? ` To clear the others use \`${await terminateCommand(device)}\` — argent ` +
-          `exposes no terminate tool, and restart-app would bring that app to the front instead.`
-        : ``;
+    // Which app is missing decides the remedy, so the two are not merged. The
+    // launched app absent from a live connections map is the one state a
+    // relaunch fixes; every other app in that map is instrumented, and
+    // relaunching one discards the state the flow built up.
+    const launchedGone = launched !== undefined && !stillConnected.includes(launched.bundleId);
+    // Say this only when a connection the flow does not drive exists to clear -
+    // which is every connection once the launched app is gone from the map, and
+    // all but one while it is still there. Name a command that exists: argent
+    // has no terminate tool, and restart-app would foreground what it restarts.
+    // Dropped whole when the command may not be offered (see
+    // {@link terminateCommand}).
+    const terminate =
+      stillConnected.length > (launchedGone ? 0 : 1) ? await terminateCommand(device) : undefined;
+    const clearOthers = terminate
+      ? ` To clear the others use \`${terminate}\` — argent exposes no terminate tool, and ` +
+        `restart-app would bring the app you cleared back to the front instead.`
+      : ``;
     return wrapPreservingFailure(
       `could not read the state of the native-devtools-connected apps, so none could be ` +
         `auto-targeted (${firstClause(err)}). Connected: ${cappedList(stillConnected)}. ` +
-        `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
-        `the app the flow drives with launch-app (it does not terminate), then retry.` +
+        (launchedGone
+          ? `${launched.bundleId} — the app this flow launched — is NOT among them, so relaunch ` +
+            `it with restart-app (or a flow \`launch\` step); launch-app does not terminate, so ` +
+            `it would only foreground the same uninstrumented process.`
+          : `They are instrumented — do not relaunch. A suspended app stops answering: foreground ` +
+            `the app the flow drives with launch-app (it does not terminate), then retry.`) +
         clearOthers,
       err
     );
@@ -664,26 +690,36 @@ async function explainTargetingFailure(
 }
 
 /**
- * The `xcrun simctl terminate` command an agent can run against this device. Two
- * targeting reasons offer it to clear a competing connected app, because argent
- * has no terminate tool.
+ * The `xcrun simctl terminate` command an agent can run against this device, or
+ * undefined when it must not be offered. Two targeting reasons quote it to clear
+ * a competing connected app, because argent has no terminate tool.
  *
  * simctl scopes each operation to one device set, so a UDID from a configured
  * `ios.additionalDeviceSets` set (Radon IDE's, for example) needs `--set` to
- * resolve. See `simctlArgsForUdid`, which argent's own call sites use. Only the
- * prefix is resolved. The udid and bundleId stay placeholders, because the agent
- * knows its device and picks the app to clear. A default-set device gets the
- * plain command, so its reason keeps the same size budget (see
+ * resolve. Only the prefix is taken. The udid and bundleId stay placeholders,
+ * because the agent knows its device and picks the app to clear. A default-set
+ * device gets the plain command, so its reason keeps the same size budget (see
  * {@link MAX_TARGETING_REASON_CHARS}).
  *
- * Call this only from a branch that interpolates the result. With additional
- * sets configured, a default-set UDID matches none of them, so `deviceSetForUdid`
- * caches nothing and re-runs the whole `simctl list devices` sweep on every
- * call - seconds, and a failing `await:` rebuilds its reason once per poll.
+ * Resolved through `simctlTargetForUdid` rather than `deviceSetForUdid` +
+ * `simctlPrefix` so the advice passes the same entitlement gate as an actual
+ * spawn: a provider that withholds the `simctl` grant for its device must not be
+ * handed a command argent itself would refuse, nor have its device-set path
+ * quoted back. The refusal is a thrown capability error, so it is caught and the
+ * clause dropped - a reason is not the place to report it.
+ *
+ * Call this only from a branch that quotes the result. `deviceSetForUdid` skips
+ * simctl entirely when no additional sets are configured and memoizes the
+ * verdict otherwise, but a UDID in no set at all re-probes on every call, and a
+ * failing `await:` rebuilds its reason once per poll.
  */
-async function terminateCommand(device: DeviceInfo): Promise<string> {
-  const prefix = simctlPrefix(await deviceSetForUdid(device.id));
-  return `xcrun ${prefix.join(" ")} terminate <udid> <bundleId>`;
+async function terminateCommand(device: DeviceInfo): Promise<string | undefined> {
+  try {
+    const { prefix } = await simctlTargetForUdid(device.id);
+    return `xcrun ${prefix.join(" ")} terminate <udid> <bundleId>`;
+  } catch {
+    return undefined;
+  }
 }
 
 // The first sentence of a diagnostic's first line: what went wrong, without the
@@ -701,10 +737,11 @@ function firstClause(err: unknown): string {
  * How many connected apps a targeting reason may list.
  *
  * The ambiguous and indeterminate branches both embed a per-app list, so without
- * a cap the reason grows with the connected-app count: 778 characters for 2
- * apps, 1000 for 4 and 1444 for 8. That cost is paid per step, because
- * `captureTapSelector` embeds the reason in the warning of every recorded tap
- * and a failing `await:` repeats it once per poll. Two entries are enough to act
+ * a cap the reason grows by one ~125-character entry per connected app: the
+ * ambiguous branch measures 702 characters at 2 apps, where the cap is still
+ * inert, and would reach about 950 at 4 and 1450 at 8. That cost is paid per
+ * step, because `captureTapSelector` embeds the reason in the warning of every
+ * recorded tap and a failing `await:` repeats it once per poll. Two entries are enough to act
  * on: the remedy is to foreground the app you want and clear the rest. The
  * dropped count is still reported.
  */
@@ -722,10 +759,14 @@ export const MAX_LISTED_APPS = 2;
  * The guard covers {@link unreadableHierarchyReason} too, which the recorder
  * repeats once per captured tap and which sets the ceiling: 775 characters for
  * `unregistered` against a 37-character bundle id, in wording shared with
- * `native-devtools-status` and iOS `describe`. The ambiguous branch is next at
- * 702, because it carries the two per-app `applicationState` diagnostics an
- * agent needs to pick the app to clear. Neither figure grows with the
- * connected-app count; see {@link MAX_LISTED_APPS}.
+ * `native-devtools-status` and iOS `describe`. That figure is 738 plus the
+ * bundle id, so the ceiling holds for the ids seen in practice and not for every
+ * one: an id of 63 characters or more puts this branch over it, and only 37 is
+ * exercised. The ambiguous branch is next at 702, because it carries the two
+ * per-app `applicationState` diagnostics an agent needs to pick the app to
+ * clear. Neither figure grows with the connected-app count beyond the digits of
+ * the `(+N more)` count - ambiguous measures 702 at 2 apps and 730 at 16; see
+ * {@link MAX_LISTED_APPS}.
  */
 export const MAX_TARGETING_REASON_CHARS = 800;
 
