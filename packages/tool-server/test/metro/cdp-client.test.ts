@@ -101,10 +101,14 @@ describe("CDPClient", () => {
     await client.disconnect();
   });
 
-  it("survives a Debugger.paused whose callFrames are not an array", async () => {
-    // The payload is another debugger's, and pausedAt() is read from the request
-    // timer, where a throw is an uncaught exception rather than one rejected
-    // send - so a malformed frame list takes the process down instead of one call.
+  // The payload is another debugger's, and pausedAt() walks it from the request
+  // timer - where a throw is an uncaught exception rather than one rejected send,
+  // so a malformed frame list takes the process down instead of one call. A
+  // number is not iterable; a null element is iterable and then dereferenced.
+  it.each([
+    ["a non-iterable callFrames", 42],
+    ["a null frame", [null]],
+  ])("survives %s on Debugger.paused", async (_what, callFrames) => {
     const client = new CDPClient(`ws://127.0.0.1:${port}`);
     const connected = client.connect();
     const ws = await waitForServer();
@@ -115,12 +119,7 @@ describe("CDPClient", () => {
     await connected;
 
     const pending = rejection(client.send("Runtime.enable", {}, 300));
-    ws.send(
-      JSON.stringify({
-        method: "Debugger.paused",
-        params: { reason: "other", callFrames: "not-a-list" },
-      })
-    );
+    ws.send(JSON.stringify({ method: "Debugger.paused", params: { reason: "other", callFrames } }));
     const err = (await pending) as Error;
 
     expect(getFailureSignal(err)).toMatchObject({
@@ -131,6 +130,33 @@ describe("CDPClient", () => {
       "The session reported a pause at a breakpoint"
     );
     expect(err.message, "and no location it could not read").not.toMatch(/at a breakpoint at /);
+    await client.disconnect();
+  });
+
+  it("reads the enables that were answered, not the platform, when nothing paused", async () => {
+    // Debugger.enable is sent late in the Metro connect and never on Chromium, so
+    // "Metro enables it" is not true of a connect that is timing out. What the
+    // hedge turns on is whether a pause WOULD have been announced, which is
+    // exactly the set of enables that came back.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.enable") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+    await client.send("Debugger.enable", {}, 300);
+
+    const err = (await rejection(client.send("Runtime.enable", {}, 300))) as Error;
+
+    expect(err.message, "the absence of a pause is evidence here").toContain(
+      "Debugger is enabled on this session, so a pause would have been announced and none " +
+        "was: it is frozen, not stopped."
+    );
+    expect(err.message, "so it does not hedge").not.toContain(
+      "Debugger is not enabled on this session"
+    );
     await client.disconnect();
   });
 

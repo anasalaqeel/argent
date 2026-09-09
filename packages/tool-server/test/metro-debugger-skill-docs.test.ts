@@ -33,6 +33,7 @@ import { networkLogsTool } from "../src/tools/network/network-logs";
 import { networkRequestTool } from "../src/tools/network/network-request";
 import { gestureSwipeTool } from "../src/tools/gesture-swipe";
 import { createDebuggerStatusTool } from "../src/tools/debugger/debugger-status";
+import { createDebuggerLogRegistryTool } from "../src/tools/debugger/debugger-log-registry";
 import { createBootDeviceTool } from "../src/tools/devices/boot-device";
 import { DEFAULT_READY_TIMEOUT_MS } from "../src/tools/devices/boot-electron";
 import { expectNoForbiddenAdvice } from "./helpers/forbidden-advice";
@@ -71,6 +72,7 @@ const CHROMIUM_REFERENCE = path.join(SKILLS, "argent-device-interact/references/
 
 const restartAppTool = createRestartAppTool({} as unknown as Registry);
 const debuggerStatusTool = createDebuggerStatusTool({} as unknown as Registry);
+const logRegistryTool = createDebuggerLogRegistryTool({} as unknown as Registry);
 const bootDeviceParams = createBootDeviceTool({} as unknown as Registry).zodSchema as unknown as {
   shape: Record<
     string,
@@ -477,6 +479,20 @@ describe("the prose derives what the code decides", () => {
       ).shape;
       expect(tool.capability?.chromium, `${tool.id} is Chromium-capable`).toBeDefined();
       pinsOnce(shape.device_id?.description, "chromium-cdp-<port>");
+      // The rest of the enumeration, held to the capability rather than to a
+      // literal: it is a list of the platforms that can answer, so a platform
+      // the gate admits and the list omits reads as one that cannot.
+      for (const [platform, word] of [
+        ["apple", "UDID"],
+        ["android", "Android"],
+        ["vega", "Vega"],
+      ] as const) {
+        if (!tool.capability?.[platform]) continue;
+        expect(
+          shape.device_id?.description,
+          `${tool.id} accepts ${platform}, so its device_id names it`
+        ).toContain(word);
+      }
     }
   });
 
@@ -505,6 +521,16 @@ describe("the prose derives what the code decides", () => {
       debuggerStatusTool.description,
       "the CDP endpoint is unreachable, answered malformed, or (Chromium) is up with no " +
         "drivable page"
+    );
+    // The tools reference carries the same list to a reader with no skill open,
+    // and these two are the exception on it: every other Chromium-capable tool
+    // fails on a windowless app, while these answer with the result above. A
+    // paragraph that sweeps them in tells the reader the recovery it then sends
+    // them to is unavailable.
+    pinsOnce(
+      readFileSync(TOOLS_REFERENCE, "utf8"),
+      `except \`${debuggerStatusTool.id}\` and \`${logRegistryTool.id}\`, which answer ` +
+        "with a `not_connected` result rather than failing"
     );
     // The one instruction attached to that list. Without it the reasons read as a
     // taxonomy, and the reason most likely to be retry-looped waits out a full CDP
