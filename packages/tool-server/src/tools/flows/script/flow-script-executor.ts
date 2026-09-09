@@ -609,6 +609,7 @@ export class FlowScriptExecutor {
         );
       }
       interpreterPath = found.path;
+      if (found.note) notes.push(found.note);
       try {
         exchange = createExchange(
           this.options.exchangeRoot ?? os.tmpdir(),
