@@ -30,12 +30,12 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
- * The detail beside either arm is the shared request-timeout message, whose
- * no-pause branch asks the user which state the app is in. Both arms answer that
- * above, so the ask is a step with no decision left in it.
+ * One of the detail's three branches - no pause reported, and Debugger off, so
+ * its absence is not evidence - asks the user which state the app is in. Both
+ * arms answer that above, so there the ask is a step with no decision left in it.
  */
 const DETAIL_ASK_IS_ANSWERED =
-  "The detail asks the user to check which state the app is in; the sentence above " +
+  "Where the detail asks the user to check which state the app is in, the sentence above " +
   "answers it, so skip that. ";
 
 /**

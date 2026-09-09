@@ -565,8 +565,8 @@ describe("the prose derives what the code decides", () => {
     // on Metro can report a pause the guidance defers to - for the reader to guess.
     pinsOnce(
       recovery,
-      "answers the question the `detail` beside it puts to the user — and on Metro yields " +
-        "to that detail where it reports a pause"
+      "answers the `detail`'s ask where it makes one — and on Metro yields to that detail " +
+        "where it reports a pause"
     );
     expect(recovery, "and says the throw carries neither field").toMatch(
       /no `guidance` and no `detail`/

@@ -111,6 +111,10 @@ describe("expectNoForbiddenAdvice", () => {
       "Never boot the app again while it is up.",
       "A missing entry does not show the app exited.",
       "Do not ignore that guidance.",
+      // A refusal standing between the tool and the platform is how every
+      // surface states the rule, in each of the shapes they write it.
+      "use restart-app, which is refused on Chromium.",
+      "Keep the id boot-device returned.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -157,6 +161,16 @@ describe("expectNoForbiddenAdvice", () => {
       "An absent entry indicates the app is gone.",
       "If nothing is listed, boot the app again.",
       "Ignore that guidance on Chromium.",
+      // A dash or a bracket between the negation and the act puts them in
+      // different clauses, so the negation is about a different claim - these are
+      // the barred sentences a rewrite of the recovery's own prose produces.
+      "The exit is not confirmed - relaunch it anyway.",
+      "The exit is not confirmed – relaunch it anyway.",
+      "This is not a Metro session - use restart-app on chromium.",
+      "[not confirmed] use restart-app on chromium",
+      "list-devices is not authoritative - a missing entry means the app exited.",
+      // A fronted "On Chromium," is one clause, not two.
+      "On Chromium, use restart-app to bring it back.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

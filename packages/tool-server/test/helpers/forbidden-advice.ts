@@ -13,18 +13,22 @@ import { expect } from "vitest";
  * while turning correct prose red.
  */
 const NEGATION = String.raw`(?:do(?:es|id)?n't |do(?:es|id)? not |cannot |can't |could not |couldn't |must not |mustn't |should not |shouldn't |will not |won't |never |no longer |rather than |is not |isn't |are not |aren't |was not |wasn't |were not |weren't |not )`;
+// One character of the run between a guard and what it guards. It may not cross
+// into another clause, in either direction: one clause over, a negation is about
+// a different claim, and so is a platform. Every separator this repo writes a
+// clause break with, including all three of its dashes.
+const SAME_CLAUSE = String.raw`(?:(?! - )[^.;:—–()\[\]\n])`;
 // The negation is not always against the verb ("it is not enough to just
-// relaunch it"), so the guard reaches over the words between them — but stops at
-// the clause. One clause over, a negation is about a different claim, and the
-// recovery's own vocabulary would then excuse the sentence it introduces:
+// relaunch it"), so the guard reaches over the words between them. Without the
+// clause limit the recovery's own vocabulary excuses the sentence it introduces:
 // "the exit cannot be confirmed, so relaunch it anyway" is the advice this list
 // exists to catch, written in the words the guidance itself uses.
-const NEGATED = NEGATION + String.raw`[^.,;:—\n]{0,32}`;
-// Same reason on the other side of a match: two clauses are two claims, so
-// "use restart-app; on Chromium it is refused" is not an instruction to use it
-// on Chromium, and neither is the same sentence broken by a bracket or by any of
-// the three dashes this repo writes clauses with.
-const WITHIN_CLAUSE = String.raw`(?:(?! - )[^.,;:—–()\n]){0,40}`;
+const NEGATED = NEGATION + String.raw`(?:(?!,)${SAME_CLAUSE}){0,32}`;
+// Between the tool and the platform, a comma is not a break - "On Chromium, use
+// restart-app" is one clause - so what disqualifies the pair here is a refusal
+// standing between them, which is how every surface states the rule correctly.
+const REFUSAL = String.raw`(?:not|never|no|cannot|can't|refus\w*|unsupported|only)`;
+const WITHIN_CLAUSE = String.raw`(?:(?!\b${REFUSAL}\b)(?:,|${SAME_CLAUSE})){0,40}`;
 
 const FORBIDDEN: [RegExp, string][] = [
   // `anyway` is one wording of it; the rest are what a shortening rewrite

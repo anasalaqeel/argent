@@ -269,16 +269,27 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     );
     for (const [what, fact] of [
       // boot-device's Chromium branch dispatches on electronAppPath...
-      ["the Electron branch", /boot-device with electronAppPath/],
+      ["the Electron branch", "boot-device with electronAppPath"],
       // ...so a browser found by port probing has no path and only the user can
       // bring it back.
-      ["the browser branch", /--remote-debugging-port/],
-      // And electronPort defaults to a free port, so it comes back as a new id.
-      ["the new id", /new port/],
+      ["the browser branch", "--remote-debugging-port"],
+      // The id follows the port, and neither branch guarantees a new one:
+      // electronPort pins it when passed, pickFreePort may hand back the port
+      // that just freed, and a browser's is whatever the user types. So the
+      // sentence is conditional in both, to the word - matching on "new port"
+      // alone passes an unconditional claim against a conditional one.
+      ["the id churn", "A relaunch on a new port is a new id"],
     ] as const) {
-      expect(detail, `the detail names ${what}`).toMatch(fact);
-      expect(guidance, `the guidance names ${what}`).toMatch(fact);
+      expect(detail, `the detail names ${what}`).toContain(fact);
+      expect(guidance, `the guidance names ${what}`).toContain(fact);
     }
+    for (const [where, text] of [
+      ["detail", detail],
+      ["guidance", guidance],
+    ] as const)
+      expect(text, `the ${where} promises no port it cannot know`).not.toMatch(
+        /either way it is on a new port|(?:comes|come) back on a new port/i
+      );
   });
 
   it("claims only what timed out on Metro, and the frozen renderer on Chromium", () => {

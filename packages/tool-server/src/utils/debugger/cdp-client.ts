@@ -349,8 +349,10 @@ export class CDPClient {
         `If it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
         `Chromium restart-app is refused, so the quit is the user's and the relaunch waits ` +
         `for the exit: boot-device with electronAppPath brings an Electron app back, a ` +
-        `browser only comes back if the user starts it again with --remote-debugging-port, ` +
-        `and either way it is on a new port and so a new id. Then reconnect and retry once.`
+        `browser only comes back if the user starts it again with --remote-debugging-port. ` +
+        `A relaunch on a new port is a new id, so confirm the port before reconnecting — ` +
+        `list-devices probes only 9222, ARGENT_CHROMIUM_PORTS and the ports boot-device ` +
+        `opened. Then reconnect and retry once.`
     );
   }
 
@@ -573,12 +575,17 @@ export class CDPClient {
     if (!method) return;
 
     if (method === "Debugger.scriptParsed") {
+      // Every consumer of this map reads url as a string - locateFrames splits
+      // it from the request timer, where a throw is uncaught - and the socket it
+      // arrives on is shared with whatever else is debugging the app.
+      const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+      const num = (v: unknown) => (typeof v === "number" ? v : 0);
       const script: ScriptInfo = {
-        scriptId: params.scriptId as string,
-        url: params.url as string,
-        sourceMapURL: params.sourceMapURL as string | undefined,
-        startLine: (params.startLine as number) ?? 0,
-        endLine: (params.endLine as number) ?? 0,
+        scriptId: str(params.scriptId) ?? "",
+        url: str(params.url) ?? "",
+        sourceMapURL: str(params.sourceMapURL),
+        startLine: num(params.startLine),
+        endLine: num(params.endLine),
       };
       this.scripts.set(script.scriptId, script);
       this.events.emit("scriptParsed", script);

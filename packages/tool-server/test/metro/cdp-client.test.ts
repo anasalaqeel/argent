@@ -144,6 +144,43 @@ describe("CDPClient", () => {
     await client.disconnect();
   });
 
+  it("survives a scriptParsed url that is not a string", async () => {
+    // The frame walk's other input: Hermes leaves the frame's own url empty and
+    // names the script by id, so the map is what gets split - and it is filled
+    // from the same shared socket as the pause.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.enable") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.scriptParsed",
+        params: { scriptId: "7", url: 42, startLine: "x" },
+      })
+    );
+
+    const pending = rejection(client.send("Runtime.enable", {}, 300));
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.paused",
+        params: { reason: "other", callFrames: [{ location: { scriptId: "7", lineNumber: 0 } }] },
+      })
+    );
+    const err = (await pending) as Error;
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+    });
+    expect(err.message, "names the pause, with no place it could not read").toContain(
+      "The session reported a pause at a breakpoint,"
+    );
+    await client.disconnect();
+  });
+
   it("reads the enables that were answered, not the platform, when nothing paused", async () => {
     // Debugger.enable is sent late in the Metro connect and never on Chromium, so
     // "Metro enables it" is not true of a connect that is timing out. What the
@@ -505,14 +542,22 @@ describe("CDPClient", () => {
       );
       // Both relaunch branches and the id churn, the three facts CHROMIUM_GUIDANCE
       // carries: boot-device's Chromium branch dispatches on electronAppPath, so
-      // it cannot bring a browser back, and electronPort defaults to a free port,
-      // so whatever comes back is a different id.
+      // it cannot bring a browser back; and the id follows the port, which the
+      // relaunch may or may not change - electronPort pins it when passed, and a
+      // browser's is whatever the user types.
       pinsOnce(
         message,
         "On Chromium restart-app is refused, so the quit is the user's and the relaunch " +
           "waits for the exit: boot-device with electronAppPath brings an Electron app " +
           "back, a browser only comes back if the user starts it again with " +
-          "--remote-debugging-port, and either way it is on a new port and so a new id."
+          "--remote-debugging-port."
+      );
+      // Conditional, the way the guidance beside it states it: an unconditional
+      // "it comes back on a new port" sends the reader to discard an id that is
+      // still right, and to hunt for one on a port list-devices does not probe.
+      pinsOnce(message, "A relaunch on a new port is a new id");
+      expect(message, "claims no new port it cannot know about").not.toMatch(
+        /either way it is on a new port|comes back on a new port/i
       );
       // And does not hand the recovery to debugger-status, which is the one tool
       // that cannot give it: a post-connect hang leaves the socket OPEN, so it
