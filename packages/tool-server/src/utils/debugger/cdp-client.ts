@@ -352,7 +352,8 @@ export class CDPClient {
         `browser only comes back if the user starts it again with --remote-debugging-port. ` +
         `A relaunch on a new port is a new id, so confirm the port before reconnecting — ` +
         `list-devices probes only 9222, ARGENT_CHROMIUM_PORTS and the ports boot-device ` +
-        `opened. Then reconnect and retry once.`
+        `opened, so take the port from the user if they name one. Then reconnect and retry ` +
+        `once.`
     );
   }
 

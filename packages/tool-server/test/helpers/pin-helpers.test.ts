@@ -115,6 +115,9 @@ describe("expectNoForbiddenAdvice", () => {
       // surface states the rule, in each of the shapes they write it.
       "use restart-app, which is refused on Chromium.",
       "Keep the id boot-device returned.",
+      // The refusal after the platform, which neither guard can see from where it
+      // stands - so the span between the two has to be what keeps this clean.
+      "Use restart-app on iOS / Android / Vega, but on Chromium it is refused.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -171,6 +174,14 @@ describe("expectNoForbiddenAdvice", () => {
       "list-devices is not authoritative - a missing entry means the app exited.",
       // A fronted "On Chromium," is one clause, not two.
       "On Chromium, use restart-app to bring it back.",
+      // A "so" clause inherits the topic, so these are one claim across two
+      // clauses - and each is assembled out of sentences the recovery itself
+      // ships, which is what makes them the plausible rewrite rather than a
+      // contrived one.
+      "On Chromium, boot-device only starts an app, so use restart-app.",
+      "On Chromium there is no launch-app, so use restart-app.",
+      "On Chromium it never stops one, so use restart-app.",
+      "On Chromium the exit cannot be confirmed, so use restart-app.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

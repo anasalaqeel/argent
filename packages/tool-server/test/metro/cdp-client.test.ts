@@ -159,7 +159,7 @@ describe("CDPClient", () => {
     ws.send(
       JSON.stringify({
         method: "Debugger.scriptParsed",
-        params: { scriptId: "7", url: 42, startLine: "x" },
+        params: { scriptId: "7", url: 42, sourceMapURL: 5, startLine: "x", endLine: null },
       })
     );
 
@@ -178,6 +178,19 @@ describe("CDPClient", () => {
     expect(err.message, "names the pause, with no place it could not read").toContain(
       "The session reported a pause at a breakpoint,"
     );
+    // And the map holds what its type says for every field, not just the one the
+    // walk reads: registerFromScriptParsed takes sourceMapURL as a string it
+    // never checks, and ScriptInfo's line numbers are declared numbers.
+    const stored = client.getLoadedScripts().get("7")!;
+    expect(stored, "the script was stored under its id").toBeDefined();
+    for (const [field, type] of [
+      ["scriptId", "string"],
+      ["url", "string"],
+      ["startLine", "number"],
+      ["endLine", "number"],
+    ] as const)
+      expect(typeof stored[field], `${field} is stored as a ${type}`).toBe(type);
+    expect(stored.sourceMapURL, "a non-string sourceMapURL is dropped").toBeUndefined();
     await client.disconnect();
   });
 

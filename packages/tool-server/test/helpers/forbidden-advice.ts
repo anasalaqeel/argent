@@ -16,19 +16,20 @@ const NEGATION = String.raw`(?:do(?:es|id)?n't |do(?:es|id)? not |cannot |can't 
 // One character of the run between a guard and what it guards. It may not cross
 // into another clause, in either direction: one clause over, a negation is about
 // a different claim, and so is a platform. Every separator this repo writes a
-// clause break with, including all three of its dashes.
-const SAME_CLAUSE = String.raw`(?:(?! - )[^.;:—–()\[\]\n])`;
+// clause break with, the comma and all three of its dashes included.
+const SAME_CLAUSE = String.raw`(?:(?! - )[^.,;:—–()\[\]\n])`;
 // The negation is not always against the verb ("it is not enough to just
 // relaunch it"), so the guard reaches over the words between them. Without the
 // clause limit the recovery's own vocabulary excuses the sentence it introduces:
 // "the exit cannot be confirmed, so relaunch it anyway" is the advice this list
 // exists to catch, written in the words the guidance itself uses.
-const NEGATED = NEGATION + String.raw`(?:(?!,)${SAME_CLAUSE}){0,32}`;
-// Between the tool and the platform, a comma is not a break - "On Chromium, use
-// restart-app" is one clause - so what disqualifies the pair here is a refusal
-// standing between them, which is how every surface states the rule correctly.
-const REFUSAL = String.raw`(?:not|never|no|cannot|can't|refus\w*|unsupported|only)`;
-const WITHIN_CLAUSE = String.raw`(?:(?!\b${REFUSAL}\b)(?:,|${SAME_CLAUSE})){0,40}`;
+const NEGATED = NEGATION + String.raw`${SAME_CLAUSE}{0,32}`;
+// Between the tool and the platform, a fronted phrase is not a second claim -
+// "On Chromium, use restart-app" is one clause - but everything longer past a
+// comma is: "use restart-app, which is refused on Chromium" and "on Chromium,
+// boot-device only starts an app, so use restart-app" both name a second subject
+// there. So a comma may be crossed, and then only a few words.
+const WITHIN_CLAUSE = String.raw`(?:${SAME_CLAUSE}{0,40}|,\s?${SAME_CLAUSE}{0,8})`;
 
 const FORBIDDEN: [RegExp, string][] = [
   // `anyway` is one wording of it; the rest are what a shortening rewrite
@@ -86,6 +87,18 @@ const FORBIDDEN: [RegExp, string][] = [
     new RegExp(
       String.raw`chromium${WITHIN_CLAUSE}(?<!${NEGATED})` +
         String.raw`(?:relaunch(?:ed)? (?:it |the app )?with|\buse) \`?restart-app`,
+      "i"
+    ),
+    "restart-app on Chromium",
+  ],
+  // A "so" clause inherits the topic of the sentence it hangs off, so the platform
+  // and the instruction can sit clauses apart and still be one claim - and every
+  // barred sentence of that shape is built out of the recovery's own words ("on
+  // Chromium boot-device only starts an app, so use restart-app").
+  [
+    new RegExp(
+      String.raw`chromium[^.]{0,80}\bso (?:you (?:can |should )?)?` +
+        String.raw`(?:use|call) \`?restart-app`,
       "i"
     ),
     "restart-app on Chromium",

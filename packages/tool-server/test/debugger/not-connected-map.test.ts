@@ -62,6 +62,55 @@ const MAP: Array<[FailureSignal["error_code"], string]> = [
   [FAILURE_CODES.REGISTRY_SERVICE_TERMINATING, "reconnecting"],
 ];
 
+/**
+ * The real request-timeout message, from a real timeout. A copy would make the
+ * premise below a statement about the copy: cdp-client could reword the text
+ * this guidance has to reconcile with and nothing here would go red.
+ */
+async function realCdpTimeoutDetail(announcePause = false): Promise<string> {
+  const wss = new WebSocketServer({ port: 0 });
+  try {
+    await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+    const { port } = wss.address() as { port: number };
+    if (announcePause)
+      wss.on("connection", (ws) =>
+        ws.send(
+          JSON.stringify({
+            method: "Debugger.paused",
+            params: {
+              reason: "other",
+              callFrames: [
+                { url: "http://localhost:8081/index.bundle", location: { lineNumber: 41 } },
+              ],
+            },
+          })
+        )
+      );
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    await client.connect();
+    try {
+      if (announcePause) {
+        // The event has to land before the timer, or this builds the other
+        // branch and the assertions below pass against the wrong string.
+        const deadline = Date.now() + 2_000;
+        while (!client.pausedAt() && Date.now() < deadline)
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        expect(client.pausedAt(), "the mock's Debugger.paused reached the client").toBeDefined();
+      }
+      // The server accepts the socket and never answers, so the per-request
+      // timer is the only way out.
+      await client.send("Runtime.enable", {}, 20);
+    } catch (err) {
+      return (err as Error).message;
+    } finally {
+      await client.disconnect();
+    }
+    throw new Error("expected the send to time out");
+  } finally {
+    await new Promise<void>((resolve) => wss.close(() => resolve()));
+  }
+}
+
 describe("classifyNotConnected code map", () => {
   it.each(MAP)("%s → %s", (code, reason) => {
     expect(classifyNotConnected(coded(code))).toBe(reason);
@@ -147,55 +196,6 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
       "To relaunch: restart-app is refused on Chromium"
     );
   });
-
-  /**
-   * The real request-timeout message, from a real timeout. A copy would make the
-   * premise below a statement about the copy: cdp-client could reword the text
-   * this guidance has to reconcile with and nothing here would go red.
-   */
-  async function realCdpTimeoutDetail(announcePause = false): Promise<string> {
-    const wss = new WebSocketServer({ port: 0 });
-    try {
-      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
-      const { port } = wss.address() as { port: number };
-      if (announcePause)
-        wss.on("connection", (ws) =>
-          ws.send(
-            JSON.stringify({
-              method: "Debugger.paused",
-              params: {
-                reason: "other",
-                callFrames: [
-                  { url: "http://localhost:8081/index.bundle", location: { lineNumber: 41 } },
-                ],
-              },
-            })
-          )
-        );
-      const client = new CDPClient(`ws://127.0.0.1:${port}`);
-      await client.connect();
-      try {
-        if (announcePause) {
-          // The event has to land before the timer, or this builds the other
-          // branch and the assertions below pass against the wrong string.
-          const deadline = Date.now() + 2_000;
-          while (!client.pausedAt() && Date.now() < deadline)
-            await new Promise((resolve) => setTimeout(resolve, 5));
-          expect(client.pausedAt(), "the mock's Debugger.paused reached the client").toBeDefined();
-        }
-        // The server accepts the socket and never answers, so the per-request
-        // timer is the only way out.
-        await client.send("Runtime.enable", {}, 20);
-      } catch (err) {
-        return (err as Error).message;
-      } finally {
-        await client.disconnect();
-      }
-      throw new Error("expected the send to time out");
-    } finally {
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
-    }
-  }
 
   it("answers the detail beside it, one arm per shape that detail can take", async () => {
     // buildNotConnected picks the guidance by (reason, platform) alone - it never
@@ -369,11 +369,14 @@ describe("both Chromium overrides carry the whole recovery", () => {
     );
   });
 
-  it("names the probe set discovery actually has, not a restated one", () => {
+  it("names the probe set discovery actually has, not a restated one", async () => {
     // The closing clause tells the reader where the new id can be read back. A
     // literal that drifts from getCandidateChromiumPorts sends them to look on a
     // port nothing probes, so derive it: with the env list and the persisted file
     // both out of the way, what is left is the default the prose has to name.
+    // Both copies, because they ship in one payload: the guidance and the
+    // request-timeout message that is its detail.
+    const detail = await realCdpTimeoutDetail();
     const prevList = process.env.ARGENT_CHROMIUM_PORTS;
     const prevFile = process.env.ARGENT_CHROMIUM_PORTS_FILE;
     delete process.env.ARGENT_CHROMIUM_PORTS;
@@ -386,11 +389,11 @@ describe("both Chromium overrides carry the whole recovery", () => {
     );
     try {
       const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
-      pinsOnce(
-        guidance,
+      const probes =
         `list-devices probes only ${getCandidateChromiumPorts().join(", ")}, ` +
-          "ARGENT_CHROMIUM_PORTS and the ports boot-device opened"
-      );
+        "ARGENT_CHROMIUM_PORTS and the ports boot-device opened";
+      pinsOnce(guidance, probes);
+      pinsOnce(detail, probes);
       // And the env var it names is the one discovery reads - the name is prose on
       // both sides, so nothing but a round trip through the function pins it.
       process.env.ARGENT_CHROMIUM_PORTS = "9333";
