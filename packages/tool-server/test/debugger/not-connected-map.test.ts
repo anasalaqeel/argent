@@ -11,7 +11,11 @@ import { classifyNotConnected, buildNotConnected } from "../../src/tools/debugge
 import { createRestartAppTool } from "../../src/tools/restart-app";
 import { expectNoForbiddenAdvice } from "../helpers/forbidden-advice";
 import { pinsOnce } from "../helpers/pins";
-import { discoverPrimaryPage, ensureCdpReachable } from "../../src/chromium-server/cdp-session";
+import {
+  discoverPrimaryPage,
+  ensureCdpReachable,
+  listPageTargets,
+} from "../../src/chromium-server/cdp-session";
 import { getCandidateChromiumPorts } from "../../src/utils/chromium-discovery";
 import { CDPClient } from "../../src/utils/debugger/cdp-client";
 import { WebSocketServer } from "ws";
@@ -594,21 +598,28 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       ).not.toContain(phrase);
     }
 
-    // The two INVALID_RESPONSE sub-phrases the same arm routes on: a reachable
-    // port answering non-2xx, or 200 with a body that is not JSON. Driven from
-    // real servers so a reword of either throw site strands the guidance's
-    // squatter routing, exactly as the two phrases above are guarded.
+    // The three INVALID_RESPONSE sub-phrases the same arm routes on: a reachable
+    // port answering non-2xx, 200 with a body that is not JSON, and 200 with JSON
+    // that is not a target list. Driven from real servers so a reword of any
+    // throw site strands the guidance's squatter routing, exactly as the two
+    // phrases above are guarded - and so that a throw site added without a phrase
+    // is caught here rather than by a reader who gets no state at all.
     const HTTP_STATUS = "failed (HTTP";
     const NOT_JSON = "returned a body that is not valid JSON";
-    async function discoveryError(onVersion: (res: http.ServerResponse) => void): Promise<string> {
+    const NOT_A_LIST = "did not return a target list";
+    async function discoveryError(
+      onVersion: (res: http.ServerResponse) => void,
+      onList?: (res: http.ServerResponse) => void
+    ): Promise<string> {
       const server = http.createServer((req, res) => {
         if (req.url === "/json/version") return onVersion(res);
+        if (req.url === "/json/list" && onList) return onList(res);
         res.statusCode = 404;
         res.end();
       });
       await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
       const { port } = server.address() as { port: number };
-      const err = await ensureCdpReachable(port).then(
+      const err = await (onList ? listPageTargets(port) : ensureCdpReachable(port)).then(
         () => undefined,
         (e: unknown) => e
       );
@@ -630,6 +641,23 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     expect(notJson, "non-JSON discovery carries the sub-phrase the guidance routes on").toContain(
       NOT_JSON
     );
+    const notAList = await discoveryError(
+      (res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ Browser: "SomeApi/1" }));
+      },
+      (res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ status: "ok" }));
+      }
+    );
+    expect(
+      notAList,
+      "a target list of the wrong shape carries the sub-phrase the guidance routes on"
+    ).toContain(NOT_A_LIST);
+    expect(classifyNotConnected(new Error(notAList)), "and it is the squatter class").toBe(
+      undefined
+    );
 
     const { guidance } = chromium("cdp_unreachable", FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE);
     // The three arms, each keyed on what the detail carries rather than on where
@@ -650,6 +678,7 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     // actor is the user, and no relaunch on that port clears it.
     pinsOnce(guidance, `'${HTTP_STATUS} <status>)'`);
     pinsOnce(guidance, `'${NOT_JSON}'`);
+    pinsOnce(guidance, `'${NOT_A_LIST}'`);
     pinsOnce(
       guidance,
       "means something that is not CDP holds the port, which no relaunch on that port " +
