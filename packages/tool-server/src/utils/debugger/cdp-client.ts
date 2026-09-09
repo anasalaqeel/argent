@@ -276,10 +276,12 @@ export class CDPClient {
       const frame = (raw ?? {}) as { location?: { lineNumber?: unknown; scriptId?: unknown } };
       const scriptId = frame.location?.scriptId;
       const own = (raw as { url?: unknown })?.url;
+      // "" is the id every script with an unusable one is filed under, so it
+      // resolves to whichever of them landed last - a file the pause is not in.
       const url =
         typeof own === "string" && own
           ? own
-          : typeof scriptId === "string"
+          : typeof scriptId === "string" && scriptId
             ? this.scripts.get(scriptId)?.url
             : undefined;
 
@@ -289,7 +291,7 @@ export class CDPClient {
       const where = trimBundleQuery(url);
 
       return {
-        location: typeof line === "number" ? `${where}:${line + 1}` : where,
+        location: Number.isFinite(line) ? `${where}:${(line as number) + 1}` : where,
       };
     }
 

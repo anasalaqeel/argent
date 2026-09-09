@@ -101,6 +101,100 @@ describe("CDPClient", () => {
     await client.disconnect();
   });
 
+  it("blames the pause for a send that does run on the stopped thread", async () => {
+    // The other arm of the same sentence. The send-time guard misses exactly this
+    // case - the pause lands after the send is on the wire - so a blocked method
+    // does reach the timeout, and there the pause IS the explanation.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.evaluate") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+
+    const pending = rejection(client.send("Runtime.evaluate", { expression: "1" }, 300));
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.paused",
+        params: { reason: "exception", callFrames: [{ url: "http://a/b.js" }] },
+      })
+    );
+    const err = (await pending) as Error;
+
+    expect(err.message, "names the pause and its reason").toContain(
+      "The session reported a pause on an exception at http://a/b.js"
+    );
+    expect(err.message, "and blames it, because this send needs that thread").toContain(
+      "Runtime.evaluate runs on the thread it stopped, so that is what this is."
+    );
+    expect(err.message, "so it does not hand back the inspector wording").not.toContain(
+      "answered by the inspector"
+    );
+    await client.disconnect();
+  });
+
+  it("appends no line when the frame's is out of range", async () => {
+    // JSON has no Infinity literal but it has 1e400, which parses to one - so a
+    // number that is not a line is what a peer can put on the wire, and it is the
+    // only shape of it that survives JSON.stringify to get here.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.enable") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+
+    const pending = rejection(client.send("Runtime.enable", {}, 300));
+    ws.send(
+      '{"method":"Debugger.paused","params":{"reason":"other","callFrames":' +
+        '[{"url":"http://a/b","location":{"lineNumber":1e400}}]}}'
+    );
+    const err = (await pending) as Error;
+
+    expect(err.message, "names the file").toContain("pause at a breakpoint at http://a/b,");
+    expect(err.message, "and no line").not.toMatch(/http:\/\/a\/b:/);
+    await client.disconnect();
+  });
+
+  it("does not resolve a frame's empty scriptId to a script filed under one", async () => {
+    // A script whose own id was unusable is stored under "", and "" is a string -
+    // so a frame carrying one would read back that script's url and name a file
+    // the pause is not in.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.enable") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.scriptParsed",
+        params: { scriptId: 7, url: "http://a/unrelated.js" },
+      })
+    );
+
+    const pending = rejection(client.send("Runtime.enable", {}, 300));
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.paused",
+        params: { reason: "other", callFrames: [{ location: { scriptId: "", lineNumber: 3 } }] },
+      })
+    );
+    const err = (await pending) as Error;
+
+    expect(err.message, "reports the pause with no place").toContain(
+      "The session reported a pause at a breakpoint,"
+    );
+    expect(err.message, "and never the file it is not in").not.toContain("unrelated.js");
+    await client.disconnect();
+  });
+
   // The payload is another debugger's, and pausedAt() walks it from the request
   // timer - where a throw is an uncaught exception rather than one rejected send,
   // so a malformed frame list takes the process down instead of one call. A
@@ -159,7 +253,7 @@ describe("CDPClient", () => {
     ws.send(
       JSON.stringify({
         method: "Debugger.scriptParsed",
-        params: { scriptId: "7", url: 42, sourceMapURL: 5, startLine: "x", endLine: null },
+        params: { scriptId: "7", url: 42, sourceMapURL: 5, startLine: "x", endLine: "y" },
       })
     );
 

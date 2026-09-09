@@ -439,13 +439,13 @@ describe("the prose derives what the code decides", () => {
     pinsOnce(reinstallAppTool.description, "Not supported on Chromium: there is no install step");
     pinsOnce(
       readFileSync(INTERACTING_FEATURE, "utf8"),
-      "On a Chromium app only the URL is the agent's: the user quits the app, and the agent " +
-        "starts an Electron app again itself. Argent does not reinstall a Chromium app."
+      "Of these, only opening a URL survives on a Chromium app: the user quits it, and the " +
+        "agent starts an Electron app again itself. Argent does not reinstall a Chromium app."
     );
     pinsOnce(
       readFileSync(DEBUGGING_FEATURE, "utf8"),
-      "On a Chromium app only the URL is the agent's: the user quits the app, and the agent " +
-        "starts an Electron app again itself."
+      "Of these, only opening a URL survives on a Chromium app: the user quits it, and the " +
+        "agent starts an Electron app again itself."
     );
   });
 
@@ -459,6 +459,22 @@ describe("the prose derives what the code decides", () => {
         chromiumTabsTool.id +
         "` (which needs an existing page, so it cannot reopen the " +
         "last window once it is closed)"
+    );
+  });
+
+  it("says opening a tab is browser-only everywhere the action is advertised", () => {
+    // Target.createTarget is a browser-level method an Electron app does not
+    // have, so `new` is the one action of the four that no state on Electron
+    // makes available - and both surfaces that list the four otherwise read as
+    // offering it. A reader who believes them spends the call to find out.
+    pinsOnce(chromiumTabsTool.description, "`new` is refused there in every state");
+    pinsOnce(
+      readFileSync(CHROMIUM_REFERENCE, "utf8"),
+      "`new` is browser-only: an Electron app has no browser-level target creation"
+    );
+    pinsOnce(
+      readFileSync(TOOLS_REFERENCE, "utf8"),
+      "open a tab on a browser — an Electron app opens its own windows"
     );
   });
 
@@ -536,6 +552,22 @@ describe("the prose derives what the code decides", () => {
     // taxonomy, and the reason most likely to be retry-looped waits out a full CDP
     // timeout per send.
     pinsOnce(debuggerStatusTool.description, "Follow the guidance field — do not retry in a loop.");
+  });
+
+  it("keeps the reconnect row on the id the skill says a reconnect returns", () => {
+    // debugger-connect refuses a udid once two devices share one Metro and hands
+    // back a logicalDeviceId to re-target with, and a relaunch can move it. A row
+    // that ends at the list-devices id sends the reader back through the refusal
+    // the skill already told them about.
+    const row = readFileSync(FAILURE_SCENARIOS, "utf8")
+      .split("\n")
+      .find((line) => line.startsWith("|") && line.includes("Was connected, then tool fails"));
+    expect(row, "the row exists").toBeDefined();
+    pinsOnce(row ?? "", "the `logicalDeviceId` that comes back");
+    pinsOnce(
+      readFileSync(DEBUGGER_SKILL, "utf8"),
+      "use it as the `device_id` for every subsequent debugger call"
+    );
   });
 
   it("answers both shapes the runtime_unresponsive row names in its symptom", () => {

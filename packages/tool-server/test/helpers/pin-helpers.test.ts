@@ -118,6 +118,17 @@ describe("expectNoForbiddenAdvice", () => {
       // The refusal after the platform, which neither guard can see from where it
       // stands - so the span between the two has to be what keeps this clean.
       "Use restart-app on iOS / Android / Vega, but on Chromium it is refused.",
+      // The rule with the refusal first and the platform it does apply to
+      // second, which is the order a shortening rewrite reaches for, in each of
+      // the separators - including the newline and the table cell - that the
+      // surfaces carrying it are written in.
+      "`restart-app` is not supported on Chromium; on iOS / Android / Vega it is only hung, " +
+        "so use `restart-app`.",
+      "`restart-app` is not supported on Chromium — on iOS / Android / Vega it is only hung, " +
+        "so use `restart-app`.",
+      "| Relaunch | refused on Chromium | iOS / Android hang, so use restart-app |",
+      "not supported on Chromium\n\nOn iOS / Android / Vega it is hung, so use restart-app.",
+      "On Chromium it is not relaunched with restart-app, so do not call restart-app.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -182,6 +193,13 @@ describe("expectNoForbiddenAdvice", () => {
       "On Chromium there is no launch-app, so use restart-app.",
       "On Chromium it never stops one, so use restart-app.",
       "On Chromium the exit cannot be confirmed, so use restart-app.",
+      // `call` is the other verb the surfaces use for a tool, and a qualifier
+      // before the comma is still one fronted clause.
+      "Call restart-app on Chromium.",
+      "On Chromium, call restart-app.",
+      "On Chromium it never stops one, so call restart-app.",
+      "On Chromium browsers, use restart-app.",
+      "Use restart-app there, on Chromium.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });
