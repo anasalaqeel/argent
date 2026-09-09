@@ -267,18 +267,21 @@ export class CDPClient {
    * app's own bundle.
    */
   private locateFrames(callFrames: unknown): { location: string } | undefined {
-    const frames = (callFrames ?? []) as {
+    // Reached from the request timer, where a throw is an uncaught exception
+    // rather than one rejected send, so a malformed Debugger.paused takes the
+    // process down. The payload is another debugger's, not ours.
+    const frames = (Array.isArray(callFrames) ? callFrames : []) as ({
       location?: { lineNumber?: number; scriptId?: string };
       url?: string;
-    }[];
+    } | null)[];
 
     for (const frame of frames) {
-      const scriptId = frame.location?.scriptId;
-      const url = frame.url || (scriptId ? this.scripts.get(scriptId)?.url : undefined);
+      const scriptId = frame?.location?.scriptId;
+      const url = frame?.url || (scriptId ? this.scripts.get(scriptId)?.url : undefined);
 
       if (!url) continue;
 
-      const line = frame.location?.lineNumber;
+      const line = frame?.location?.lineNumber;
       const where = trimBundleQuery(url);
 
       return { location: line === undefined ? where : `${where}:${line + 1}` };
@@ -294,40 +297,63 @@ export class CDPClient {
    * leaving each caller to guess, and agents otherwise read the state as
    * transient and retry-loop, each pass waiting out the full timeout.
    *
-   * The pause is read HERE, not at send time. The guard above only covers
+   * The pause is read HERE, not at send time. The guard in send() only covers
    * BLOCKED_WHILE_PAUSED methods, and on a session Argent shares with another
    * debugger the pause can arrive after the send — in both cases a send-time
    * answer would deny a pause the session had been told about.
    */
   private timedOutError(method: string, id: number): FailureError {
     const paused = this.pausedAt();
-    const pausedness = paused
-      ? `The runtime reported a pause ${paused.reason === "exception" ? "on an exception" : "at a breakpoint"}` +
-        `${paused.location ? ` at ${paused.location}` : ""}, so that is what this is: ask the ` +
-        `user to resume it there — Argent sets no breakpoints, so another debugger stopped it — ` +
-        `and do not restart the app, which throws the debug session away. `
-      : `Nothing reported a pause on this session, which rules one out only where Debugger is ` +
-        `enabled: the Metro connect enables it and the Chromium one never does. Once the ` +
-        `session is established debugger-status reports "connected" either way, so have the ` +
-        `user check the app before choosing. `;
+    const opening =
+      `CDP request ${method} (id=${id}) timed out — the runtime accepted the connection ` +
+      `but did not answer. Do not retry in a loop. `;
 
-    return new FailureError(
-      `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
-        `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
-        `Do not retry in a loop. ` +
-        pausedness +
-        `If it is paused, ask them to resume it — quitting throws the debug session away. If ` +
-        `it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
-        `Chromium restart-app is refused and boot-device only starts an app, so the quit ` +
-        `is the user's and the relaunch has to wait for the exit — call debugger-status ` +
-        `for the recovery. Then reconnect and retry once.`,
-      {
-        error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
-        failure_stage: "debugger_cdp_send",
-        failure_area: "tool_server",
-        error_kind: "timeout",
-      }
+    // A pause stops the JS thread; the inspector answers on its own. So it
+    // explains a timeout on the methods send() refuses while paused and on no
+    // others — but on either it rules the restart out, because that discards the
+    // session the user is stopped in, and only they can give that up.
+    if (paused) {
+      const stopped = paused.reason === "exception" ? "on an exception" : "at a breakpoint";
+      return this.timedOutFailure(
+        `${opening}The session reported a pause ${stopped}` +
+          `${paused.location ? ` at ${paused.location}` : ""}, and ` +
+          (BLOCKED_WHILE_PAUSED.has(method)
+            ? `${method} runs on the thread it stopped, so that is what this is. `
+            : `${method} is answered by the inspector rather than that thread, so the pause ` +
+              `does not explain this one — the inspector itself stopped answering. `) +
+          `Ask the user to resume it there — Argent sets no breakpoints, so another debugger ` +
+          `stopped it — and retry once. Do not restart the app: that throws away the debug ` +
+          `session they are stopped in.`
+      );
+    }
+
+    // enabledDomains records the enables that were ANSWERED, which is exactly
+    // when a pause would have been announced — Debugger.enable is sent late in
+    // the Metro connect, so "Metro enables it" is not true yet of a connect that
+    // is timing out, and the Chromium one never sends it at all.
+    return this.timedOutFailure(
+      opening +
+        (this.enabledDomains.has("Debugger")
+          ? `Debugger is enabled on this session, so a pause would have been announced and ` +
+            `none was: it is frozen, not stopped. `
+          : `Debugger is not enabled on this session, so nothing here would have announced a ` +
+            `pause and its absence rules nothing out. Have the user check the app before ` +
+            `choosing: if it is paused, ask them to resume it, because quitting throws the ` +
+            `debug session away. `) +
+        `If it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
+        `Chromium restart-app is refused and boot-device only starts an app, so the user ` +
+        `quits it and boot-device brings it back once it has exited. Then reconnect and ` +
+        `retry once.`
     );
+  }
+
+  private timedOutFailure(message: string): FailureError {
+    return new FailureError(message, {
+      error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+      failure_stage: "debugger_cdp_send",
+      failure_area: "tool_server",
+      error_kind: "timeout",
+    });
   }
 
   /**

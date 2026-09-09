@@ -14,16 +14,25 @@ import { expect } from "vitest";
  */
 // The auxiliary is optional so "cannot BE relaunched with" negates as readily
 // as "cannot relaunch with" — the surfaces use both.
-const NEGATED = String.raw`(?:do(?:es)?n't |do(?:es)? not |cannot |can't |must not |never |is not |are not |not )(?:be |been )?`;
+const NEGATION = String.raw`(?:do(?:es|id)?n't |do(?:es|id)? not |cannot |can't |could not |couldn't |must not |mustn't |should not |shouldn't |will not |won't |never |no longer |rather than |is not |isn't |are not |aren't |was not |wasn't |were not |weren't |not )(?:be |been )?`;
+// The negation is not always against the verb ("it is not enough to just
+// relaunch it"), so the guard reaches over the words between them — but stops at
+// the clause. One clause over, a negation is about a different claim, and the
+// recovery's own vocabulary would then excuse the sentence it introduces:
+// "the exit cannot be confirmed, so relaunch it anyway" is the advice this list
+// exists to catch, written in the words the guidance itself uses.
+const NEGATED = NEGATION + String.raw`[^.,;:—\n]{0,32}`;
+// Same reason on the other side of a match: two clauses are two claims, so
+// "use restart-app; on Chromium it is refused" is not an instruction to use it
+// on Chromium, and neither is the same sentence broken by a dash or a bracket.
+const WITHIN_CLAUSE = String.raw`[^.,;:—()\n]{0,40}`;
 
 const FORBIDDEN: [RegExp, string][] = [
   // `anyway` is one wording of it; the rest are what a shortening rewrite
-  // reaches for. Every pattern here takes the NEGATED guard, and it spans a
-  // short run of words: the negation is not always adjacent ("it is not enough
-  // to just relaunch it"), and without the span that correct sentence fires.
+  // reaches for.
   [
     new RegExp(
-      String.raw`(?<!${NEGATED}[^.]{0,24})(?:relaunch (?:it |the app )?(?:anyway|regardless)|` +
+      String.raw`(?<!${NEGATED})(?:relaunch (?:it |the app )?(?:anyway|regardless)|` +
         String.raw`(?:just|simply) relaunch)`,
       "i"
     ),
@@ -35,7 +44,7 @@ const FORBIDDEN: [RegExp, string][] = [
   // "do not follow the guidance" contains the phrase the pin looks for.
   [
     new RegExp(
-      String.raw`(?<!${NEGATED}[^.]{0,24})(?:ignore|skip|disregard|do not follow|don't follow) ` +
+      String.raw`(?<!${NEGATED})(?:ignore|skip|disregard|do not follow|don't follow) ` +
         String.raw`(?:the |its )?\`?guidance|\`?guidance\`? is (?:stale|wrong|out of date)\b`,
       "i"
     ),
@@ -64,14 +73,15 @@ const FORBIDDEN: [RegExp, string][] = [
   ],
   [
     new RegExp(
-      String.raw`(?<!${NEGATED})(?:relaunched? (?:it )?with|use) \`?restart-app\`?[^.]{0,40}chromium`,
+      String.raw`(?<!${NEGATED})(?:relaunch(?:ed)? (?:it |the app )?with|use) ` +
+        String.raw`\`?restart-app\`?${WITHIN_CLAUSE}chromium`,
       "i"
     ),
     "restart-app on Chromium",
   ],
   [
     new RegExp(
-      String.raw`chromium[^.]{0,40}(?<!${NEGATED})relaunch(?:ed)? (?:it )?with \`?restart-app`,
+      String.raw`chromium${WITHIN_CLAUSE}(?<!${NEGATED})relaunch(?:ed)? (?:it |the app )?with \`?restart-app`,
       "i"
     ),
     "restart-app on Chromium",

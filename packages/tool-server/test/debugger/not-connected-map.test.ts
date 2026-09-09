@@ -139,7 +139,8 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     // do, and the Metro arm's was held by nothing.
     pinsOnce(
       metro().guidance,
-      `Restart it (${createRestartAppTool({} as unknown as Registry).id}), then retry once.`
+      `If the detail reports no pause, restart it ` +
+        `(${createRestartAppTool({} as unknown as Registry).id}), then retry once.`
     );
     pinsOnce(
       chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT).guidance,
@@ -152,14 +153,36 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
    * premise below a statement about the copy: cdp-client could reword the text
    * this guidance has to reconcile with and nothing here would go red.
    */
-  async function realCdpTimeoutDetail(): Promise<string> {
+  async function realCdpTimeoutDetail(announcePause = false): Promise<string> {
     const wss = new WebSocketServer({ port: 0 });
     try {
       await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
       const { port } = wss.address() as { port: number };
+      if (announcePause)
+        wss.on("connection", (ws) =>
+          ws.send(
+            JSON.stringify({
+              method: "Debugger.paused",
+              params: {
+                reason: "other",
+                callFrames: [
+                  { url: "http://localhost:8081/index.bundle", location: { lineNumber: 41 } },
+                ],
+              },
+            })
+          )
+        );
       const client = new CDPClient(`ws://127.0.0.1:${port}`);
       await client.connect();
       try {
+        if (announcePause) {
+          // The event has to land before the timer, or this builds the other
+          // branch and the assertions below pass against the wrong string.
+          const deadline = Date.now() + 2_000;
+          while (!client.pausedAt() && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 5));
+          expect(client.pausedAt(), "the mock's Debugger.paused reached the client").toBeDefined();
+        }
         // The server accepts the socket and never answers, so the per-request
         // timer is the only way out.
         await client.send("Runtime.enable", {}, 20);
@@ -174,15 +197,18 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     }
   }
 
-  it("retires the paused branch its own detail offers", async () => {
-    // The detail is the shared cdp-client timeout message, which offers a resume
-    // because debugger-evaluate — awaitPromise: true — really can hang on a
-    // breakpoint. The connect pipeline cannot pause, so the two ship contradicting
-    // instructions in one payload unless the guidance retires the branch, not just
-    // the phrase.
-    const detail = await realCdpTimeoutDetail();
-    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
-      const result = buildNotConnected(
+  it("reconciles both shapes the detail beside it can take", async () => {
+    // The detail is the shared cdp-client timeout message and it has two branches:
+    // one that reports a pause the session announced, one that reports none and
+    // asks the user which state the app is in. This guidance ends on a restart, so
+    // against the first it has to yield and against the second it has to close the
+    // ask - otherwise the two ship contradicting instructions in one payload.
+    const [unpaused, paused] = await Promise.all([
+      realCdpTimeoutDetail(),
+      realCdpTimeoutDetail(true),
+    ]);
+    const build = (detail: string, device_id: string) =>
+      buildNotConnected(
         "runtime_unresponsive",
         new FailureError(detail, {
           error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
@@ -192,19 +218,37 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
         }),
         { port: 8081, device_id }
       );
-      // The premise: the detail beside this guidance really does offer a resume.
-      expect(result.detail, "the detail offers a resume").toMatch(/ask them to resume it/);
-      // So the guidance must say the offer does not apply here — retiring the
-      // branch, not only reconciling the "frozen, or paused at a breakpoint" phrase.
-      expect(result.guidance, `${device_id}: rules the paused state out`).toMatch(
-        /paused at a breakpoint does not reach this reason/
+
+    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
+      // The premises, read off the real messages rather than assumed: one branch
+      // names a located pause, the other asks the user to tell the two apart.
+      expect(paused, "the paused branch names the pause").toContain(
+        "The session reported a pause at a breakpoint at"
       );
-      expect(result.guidance, `${device_id}: retires the detail's resume branch`).toContain(
-        "ignore its resume branch"
+      expect(unpaused, "the other branch asks the user to choose").toMatch(
+        /if it is paused, ask them to resume it/
       );
-      // And offers no resume of its own: nothing in the catalogue can resume a
+
+      const onPaused = build(paused, device_id).guidance;
+      // Against a located pause the restart is the wrong move and the resume comes
+      // first - the app is a session the user is sitting in.
+      expect(onPaused, `${device_id}: defers the restart to the detail`).toContain(
+        "get it resumed and retry once before restarting anything"
+      );
+      expect(onPaused, `${device_id}: still rules the pause out as the cause`).toMatch(
+        /paused at a breakpoint does not reach this reason|a pause stops the JS thread/
+      );
+
+      const onUnpaused = build(unpaused, device_id).guidance;
+      // Against the other branch the ask is answered: the guidance already says
+      // what timed out, so passing the question to the user is a step with no
+      // decision left in it.
+      expect(onUnpaused, `${device_id}: closes the detail's ask`).toContain(
+        "which state the app is in is already answered above"
+      );
+      // And offers no resume ask of its own: nothing in the catalogue can resume a
       // paused runtime, so a resume ask here is an instruction with no tool.
-      expect(result.guidance, `${device_id}: no resume ask of its own`).not.toMatch(
+      expect(onUnpaused, `${device_id}: no resume ask of its own`).not.toMatch(
         /ask (the user|them) to resume/i
       );
     }
@@ -340,7 +384,7 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
         code: String(getFailureSignal(caught)?.error_code),
       };
     } finally {
-      server.close();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   }
 
@@ -427,15 +471,27 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
     );
 
     const noPages = await detailFor([{ id: "1", type: "worker", title: "w", url: "x" }]);
-    // A socket-level detail: reached only after discovery answered, and it names
-    // neither phrase, which is what puts it in the guidance's third arm.
-    const socketLevel = await new CDPClient("ws://127.0.0.1:1").send("Runtime.enable").then(
+    // A socket-level detail: discovery answered and named a page, then the socket
+    // to it failed - so it names neither phrase, which is what puts it in the
+    // guidance's third arm. It has to come from a real failed upgrade: the ws
+    // library forwards the server's own words, and that forwarded text is the
+    // whole detail the reader routes on.
+    const squatter = http.createServer((_req, res) => {
+      res.writeHead(500);
+      res.end();
+    });
+    await new Promise<void>((resolve) => squatter.listen(0, "127.0.0.1", resolve));
+    const { port: squatterPort } = squatter.address() as { port: number };
+    const socketLevel = await new CDPClient(`ws://127.0.0.1:${squatterPort}`).connect().then(
       () => undefined,
       (e: unknown) => e
     );
-    expect(String(getFailureSignal(socketLevel)?.error_code)).toBe(
-      FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED
-    );
+    await new Promise<void>((resolve) => squatter.close(() => resolve()));
+    expect(socketLevel, "expected the upgrade to be refused").toBeDefined();
+    expect(
+      (socketLevel as Error).message,
+      "the detail is the server's own words, forwarded"
+    ).toContain("Unexpected server response: 500");
 
     for (const [what, message, phrase] of [
       ["nothing answered", (unreachable as Error).message, DISCOVERY],

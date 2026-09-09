@@ -89,6 +89,18 @@ describe("expectNoForbiddenAdvice", () => {
       "Do not ignore the guidance debugger-status returns.",
       "Never ignore the guidance on the result.",
       "You cannot skip the guidance here.",
+      // The negation is a clause away from the act, or spelled a way the
+      // surfaces spell it.
+      "Do not ever relaunch it there.",
+      "A Chromium app isn't relaunched with restart-app.",
+      "You won't reuse the old id.",
+      "It is no longer relaunched with restart-app on Chromium.",
+      // The refusal and the instruction are two clauses, so the platform named
+      // in one is not the platform instructed in the other. Every restart-app
+      // surface has to carry a sentence of this shape.
+      "use restart-app — not supported on Chromium",
+      "On iOS / Android / Vega, use `restart-app`; on Chromium it is refused.",
+      "Use `restart-app` (not on Chromium) to relaunch it.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -117,6 +129,16 @@ describe("expectNoForbiddenAdvice", () => {
       "Read the result and skip the guidance.",
       "Disregard the guidance on Chromium.",
       "The guidance is out of date on Chromium.",
+      // The imperative, which is how a rewrite states it.
+      "Relaunch it with `restart-app` on Chromium.",
+      "Relaunch the app with restart-app on Chromium.",
+      // The negation one clause back is about a different claim - and it is the
+      // recovery's own vocabulary, so this is what a shortening rewrite of it
+      // produces.
+      "The exit cannot be confirmed, so relaunch it anyway.",
+      "The app is not listed, so just relaunch it.",
+      "list-devices does not show it; just relaunch the app.",
+      "debugger-status is not needed here, ignore the guidance.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

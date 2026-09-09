@@ -30,16 +30,18 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
- * The detail beside this guidance is the shared request-timeout message, which
- * also covers debugger-evaluate — where a breakpoint really can hang the call, so
- * it offers a resume and asks the user which state the app is in. The connect
- * pipeline cannot pause, so the guidance has to retire that whole branch and not
- * only the phrase, or the two ship contradicting instructions in one payload.
+ * The detail beside this guidance is the shared request-timeout message, and it
+ * reports whether the session announced a pause. A pause did not cause this
+ * reason, but it does mean the user is stopped in a debug session, and the
+ * restart this guidance ends on would discard it — so the two ship contradicting
+ * instructions in one payload unless the restart yields to the detail.
  */
 const DETAIL_NAMES_A_BREAKPOINT =
-  'The detail says "frozen, or paused at a breakpoint" because that wording is ' +
-  "shared with debugger-evaluate; here only the frozen half applies, so ignore " +
-  "its resume branch and the ask that the user choose between the two. ";
+  "The detail says whether the session announced a pause. One it announced did not cause " +
+  "this — a pause stops the JS thread and what timed out here is the inspector's — but a " +
+  "session stopped in a debugger is one a restart discards, so get it resumed and retry " +
+  "once before restarting anything. Where it reports none, its ask that the user check " +
+  "which state the app is in is already answered above, so skip it. ";
 
 /**
  * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
@@ -71,7 +73,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     DETAIL_NAMES_A_BREAKPOINT +
     "Do not retry in a loop: the sends are awaited in sequence and each waits out its " +
     "own 10s timeout, so an attempt costs 20-30s — two on a session shared with another " +
-    "debugger, three otherwise — not one timeout. Restart it (restart-app), then retry once.",
+    "debugger, three otherwise — not one timeout. If the detail reports no pause, restart " +
+    "it (restart-app), then retry once.",
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. Restart the app " +
     "(restart-app) if it is not running, then call debugger-connect — the next call " +
@@ -90,10 +93,11 @@ const NOT_CONNECTED_CODE_MAP: Record<string, DebuggerNotConnectedReason> = {
   [FAILURE_CODES.DEBUGGER_CDP_NOT_CONNECTED]: "cdp_unreachable",
   [FAILURE_CODES.DEBUGGER_CDP_CONNECTION_CLOSED]: "cdp_unreachable",
   // Reachable from either connect pipeline when the target accepts the socket and
-  // then stops answering a send. A runtime paused at a breakpoint does not reach it
-  // on either platform, but for different reasons - see the two runtime_unresponsive
-  // guidance strings, which state each. Post-connect hangs are different: an OPEN
-  // socket still reports status "connected" (see the socket-state gate comment in
+  // then stops answering a send. A pause never causes it - what times out here is
+  // inspector-answered on both platforms - but a session can be paused and
+  // unresponsive at once, which is why the guidance defers to the detail before
+  // prescribing a restart. Post-connect hangs are different: an OPEN socket still
+  // reports status "connected" (see the socket-state gate comment in
   // debugger-status).
   [FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT]: "runtime_unresponsive",
   [FAILURE_CODES.CHROMIUM_CDP_UNREACHABLE]: "cdp_unreachable",

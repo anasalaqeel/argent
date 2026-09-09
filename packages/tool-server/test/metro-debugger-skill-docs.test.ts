@@ -334,15 +334,15 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
 describe("the boot-device hazards the recovery depends on", () => {
   it("carves Chromium out of force, the way headless beside it already does", () => {
     // The Electron branch forwards appPath / port / extraArgs and nothing else, so
-    // `force` never reaches it (#867). The guidance no longer advises the flag; the
-    // schema still accepts it, so the description is the only place that says so.
+    // `force` never reaches it (#867). No guidance advises the flag and the schema
+    // still accepts it, so the description is the only place that says so.
     pinsOnce(bootDeviceParams.shape.force?.description, "Ignored on Chromium");
   });
 
   it("states the Electron readiness bound the loop actually enforces", () => {
     // waitForCdpReady re-checks its deadline only between attempts and passes no
-    // AbortSignal, so one hanging fetch runs past it — "waits its own fixed 30s"
-    // was a bound the code does not enforce.
+    // AbortSignal, so one hanging fetch runs past it: the deadline is what the loop
+    // checks, not a bound it holds the fetch to.
     const description = bootDeviceParams.shape.bootTimeoutMs?.description ?? "";
     expect(description).toContain(`${DEFAULT_READY_TIMEOUT_MS / 1000}s deadline`);
     expect(description, "zod rejects rather than clamps").not.toMatch(/clamp/i);
@@ -408,6 +408,20 @@ describe("the prose derives what the code decides", () => {
       // bar exists for; naming it and then offering a relaunch is the shape.
       expectNoForbiddenAdvice(tool.description, `${tool.id}'s description`);
     }
+    // chromium-tabs is the tool that can PRODUCE the state the other two only
+    // report: close() returns list() with no fallback when nothing is left, so
+    // the last close succeeds into it. And on Electron the action that would
+    // look like the way back is refused in every state, not only this one.
+    pinsOnce(
+      chromiumTabsTool.description,
+      "Closing the last one succeeds and returns an empty list, leaving the app up with no " +
+        "drivable page"
+    );
+    pinsOnce(
+      chromiumTabsTool.description,
+      "An Electron app has no browser-level target creation, so `new` is refused there in " +
+        "every state"
+    );
   });
 
   it("carves Chromium out on the two feature pages, for each tool the gate refuses", () => {
@@ -512,7 +526,13 @@ describe("the prose derives what the code decides", () => {
       FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
     );
     pinsOnce(recovery, "Any other debugger tool throws instead");
-    pinsOnce(recovery, "one send is one timeout");
+    // The multi-timeout cost belongs to whichever call opens the session, not to
+    // debugger-status: every other debugger tool declares the service, so the
+    // registry resolves it - running the whole connect - before execute is
+    // reached. Pricing a throw at one timeout tells the reader a retry is cheap
+    // on exactly the call where it is not.
+    pinsOnce(recovery, "its debugger service resolves before the tool runs");
+    pinsOnce(recovery, "Once a session is up, one send is one timeout");
     expect(recovery, "and says the throw carries neither field").toMatch(
       /no `guidance` and no `detail`/
     );
