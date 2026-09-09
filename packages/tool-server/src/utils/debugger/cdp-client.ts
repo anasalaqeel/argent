@@ -288,6 +288,49 @@ export class CDPClient {
   }
 
   /**
+   * Frozen and paused are indistinguishable from an unanswered send and their
+   * remedies are opposite — restarting a paused runtime throws away the session
+   * the user is sitting in — so the message carries its own recovery rather than
+   * leaving each caller to guess, and agents otherwise read the state as
+   * transient and retry-loop, each pass waiting out the full timeout.
+   *
+   * The pause is read HERE, not at send time. The guard above only covers
+   * BLOCKED_WHILE_PAUSED methods, and on a session Argent shares with another
+   * debugger the pause can arrive after the send — in both cases a send-time
+   * answer would deny a pause the session had been told about.
+   */
+  private timedOutError(method: string, id: number): FailureError {
+    const paused = this.pausedAt();
+    const pausedness = paused
+      ? `The runtime reported a pause ${paused.reason === "exception" ? "on an exception" : "at a breakpoint"}` +
+        `${paused.location ? ` at ${paused.location}` : ""}, so that is what this is: ask the ` +
+        `user to resume it there — Argent sets no breakpoints, so another debugger stopped it — ` +
+        `and do not restart the app, which throws the debug session away. `
+      : `Nothing reported a pause on this session, which rules one out only where Debugger is ` +
+        `enabled: the Metro connect enables it and the Chromium one never does. Once the ` +
+        `session is established debugger-status reports "connected" either way, so have the ` +
+        `user check the app before choosing. `;
+
+    return new FailureError(
+      `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
+        `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
+        `Do not retry in a loop. ` +
+        pausedness +
+        `If it is paused, ask them to resume it — quitting throws the debug session away. If ` +
+        `it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
+        `Chromium restart-app is refused and boot-device only starts an app, so the quit ` +
+        `is the user's and the relaunch has to wait for the exit — call debugger-status ` +
+        `for the recovery. Then reconnect and retry once.`,
+      {
+        error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+        failure_stage: "debugger_cdp_send",
+        failure_area: "tool_server",
+        error_kind: "timeout",
+      }
+    );
+  }
+
+  /**
    * Why a call cannot run, in terms of what the caller can do about it.
    * Without this the request simply times out, which reads as a broken app and
    * sends whoever is debugging to the wrong place.
@@ -334,33 +377,7 @@ export class CDPClient {
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(
-          // The message carries its own recovery guidance: agents otherwise read
-          // this state as transient and retry-loop, each pass waiting out the
-          // full timeout.
-          new FailureError(
-            `CDP request ${method} (id=${id}) timed out — the runtime accepted the ` +
-              `connection but did not answer; it may be frozen, or paused at a breakpoint. ` +
-              `Do not retry in a loop. This send timed out rather than being refused, so no ` +
-              `Debugger.paused reached this session — with one in hand Runtime.evaluate is ` +
-              `rejected up front as JS_RUNTIME_PAUSED naming the location, never timed out. ` +
-              `That only rules out a pause the session was told about: Debugger is enabled on ` +
-              `the Metro connect and never on the Chromium one, and once the session is ` +
-              `established debugger-status reports "connected" either way — so have the user ` +
-              `check the app before choosing. If it ` +
-              `is paused, ask them to resume it — quitting throws the debug session away. If ` +
-              `it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
-              `Chromium restart-app is refused and boot-device only starts an app, so the quit ` +
-              `is the user's and the relaunch has to wait for the exit — call debugger-status ` +
-              `for the recovery. Then reconnect and retry once.`,
-            {
-              error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
-              failure_stage: "debugger_cdp_send",
-              failure_area: "tool_server",
-              error_kind: "timeout",
-            }
-          )
-        );
+        reject(this.timedOutError(method, id));
       }, timeout);
 
       this.pending.set(id, {

@@ -80,7 +80,12 @@ const bootDeviceParams = createBootDeviceTool({} as unknown as Registry).zodSche
 /** The bound zod enforces, so the prose stating it cannot drift off the parser. */
 function bootTimeoutBound(which: "minValue" | "maxValue"): number {
   const bound = bootDeviceParams.shape.bootTimeoutMs?.unwrap?.()[which];
-  expect(bound, `bootTimeoutMs declares a ${which}`).toEqual(expect.any(Number));
+  // zod reports ±Infinity for an absent bound, so a finiteness check is what
+  // separates "declared" from "gone"; `any(Number)` admits both.
+  expect(
+    typeof bound === "number" && Number.isFinite(bound),
+    `bootTimeoutMs declares a finite ${which}, got ${String(bound)}`
+  ).toBe(true);
   return bound as number;
 }
 const restartApp = restartAppTool.capability;
@@ -245,9 +250,11 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
       );
       // The field AND the instruction attached to it, in one needle. Split, the
       // two are satisfied by a surface that names the guidance and then tells the
-      // reader to discard it, which is the shape a rewrite reaches for.
-      expect(norm, `${where}: tells the reader to follow that field`).toContain(
-        "follow the guidance"
+      // reader to discard it, which is the shape a rewrite reaches for — and the
+      // needle has to refuse its own negation, since "do not follow the guidance"
+      // contains it. The discarding synonyms are barred by expectNoForbiddenAdvice.
+      expect(norm, `${where}: tells the reader to follow that field`).toMatch(
+        /(?<!\b(?:do not|don't|never|cannot|can't) )follow the guidance/
       );
       // And that the quit is not the agent's to make. The relaunch can be: on the
       // Electron branch it is boot-device. The reason why — boot-device only ever
@@ -256,8 +263,11 @@ describe("the Chromium recovery routes to a relaunch that exists", () => {
       expect(norm, `${where}: the quit is the user's`).toMatch(
         /the quit is the user's|ask the user to quit/
       );
-      expect(norm, `${where}: does not hand the relaunch to the user as well`).not.toMatch(
-        /the relaunch is the user's/
+      // Only the flat form these surfaces carried. A surface that splits the two
+      // correctly ("for a browser the relaunch is the user's too, for Electron it
+      // is boot-device") is saying what CHROMIUM_RELAUNCH says.
+      expect(norm, `${where}: does not hand every relaunch to the user`).not.toMatch(
+        /the relaunch is the user's move/
       );
     }
     // Four of the five name the tool, so they must also say it is refused. The
@@ -393,6 +403,9 @@ describe("the prose derives what the code decides", () => {
       expect(tool.description, `${tool.id}: says the window is the user's`).toMatch(
         /ask the user to reopen a window/i
       );
+      // These three name the windowless state, which is what the "relaunch there"
+      // bar exists for; naming it and then offering a relaunch is the shape.
+      expectNoForbiddenAdvice(tool.description, `${tool.id}'s description`);
     }
   });
 
@@ -404,10 +417,13 @@ describe("the prose derives what the code decides", () => {
       expect(tool.capability?.chromium, `${tool.id} is refused on Chromium`).toBeUndefined();
     }
     expect(openUrlTool.capability?.chromium, "open-url is the one that survives").toBeDefined();
+    // reinstall-app is the last member of restart-app's class to carry one, and
+    // the feature page's "Argent does not reinstall a Chromium app" rests on it.
+    pinsOnce(reinstallAppTool.description, "Not supported on Chromium: there is no install step");
     pinsOnce(
       readFileSync(INTERACTING_FEATURE, "utf8"),
-      "On a Chromium app it does neither: the user quits the app, and the agent starts an " +
-        "Electron app again itself. Argent does not reinstall a Chromium app."
+      "On a Chromium app only the URL is the agent's: the user quits the app, and the agent " +
+        "starts an Electron app again itself. Argent does not reinstall a Chromium app."
     );
     pinsOnce(
       readFileSync(DEBUGGING_FEATURE, "utf8"),
@@ -418,11 +434,14 @@ describe("the prose derives what the code decides", () => {
 
   it("says chromium-tabs cannot reopen the window, where a tab reader reads it", () => {
     // The tool's own description says it; references/chromium.md is where the
-    // interaction skill sends a reader for tabs, and it had the sentence with
-    // nothing holding it.
+    // interaction skill sends a reader for tabs, so the sentence has to hold
+    // there too.
     pinsOnce(
       readFileSync(CHROMIUM_REFERENCE, "utf8"),
-      "which needs an existing page, so it cannot reopen the last window once it is closed"
+      "`" +
+        chromiumTabsTool.id +
+        "` (which needs an existing page, so it cannot reopen the " +
+        "last window once it is closed)"
     );
   });
 
@@ -434,7 +453,7 @@ describe("the prose derives what the code decides", () => {
     expectNoForbiddenAdvice(listDevicesTool.description, "list-devices' description");
   });
 
-  it("names the Chromium id shape on every tool that takes a device id", () => {
+  it("names the Chromium id shape on the two network tools\u2019 device_id", () => {
     // These two are the Chromium-capable half of the network pair; a device_id
     // description enumerating only UDID and serial reads as a platform list.
     for (const tool of [networkLogsTool, networkRequestTool]) {

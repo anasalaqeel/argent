@@ -70,8 +70,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "those inspector-answered sends, so the inspector itself has stopped answering. " +
     DETAIL_NAMES_A_BREAKPOINT +
     "Do not retry in a loop: the sends are awaited in sequence and each waits out its " +
-    "own 10s timeout, so an attempt costs about 30s, not one timeout. Restart it " +
-    "(restart-app), then retry once.",
+    "own 10s timeout, so an attempt costs 20-30s — two on a session shared with another " +
+    "debugger, three otherwise — not one timeout. Restart it (restart-app), then retry once.",
   stale_connection:
     "The cached debugger connection went stale; it has been discarded. Restart the app " +
     "(restart-app) if it is not running, then call debugger-connect — the next call " +
@@ -138,9 +138,10 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "a service tag opens every detail, so read past that. " +
     "'Chromium CDP on port': the app answered and has no drivable page, so it is up and " +
     "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one — " +
-    "and do not relaunch onto a live app, which gives you a second copy and no window. If " +
-    "that detail closes by asking " +
-    "about --remote-debugging-port, ignore it: this port answered, so the flag was passed. " +
+    "and do not relaunch onto a live app: it comes up as a second copy with a window of its " +
+    "own on a different port, or dies on the single-instance lock, and neither gives this id " +
+    "a page. If that detail closes by asking about --remote-debugging-port, ignore it: this " +
+    "port answered, so the flag was passed. " +
     "'Chromium CDP discovery: GET': the discovery request itself. 'could not connect' means " +
     "nothing answered that port — consistent with an exit, not proof of one. 'failed (HTTP " +
     "<status>)' or 'returned a body that is not valid JSON' means something that is not CDP " +

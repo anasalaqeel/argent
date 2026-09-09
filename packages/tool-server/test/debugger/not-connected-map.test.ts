@@ -114,12 +114,13 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     // Chromium connect path issues four enables, setFocusEmulationEnabled and the
     // viewport read in sequence and fails at 60.0s; the Metro path issues
     // FuseboxClient.setClientMetadata, ReactNativeApplication.enable and
-    // Runtime.enable and fails at 30.0s. The sentence exists to price a retry, so
-    // "the full timeout" — one 10s send — understates it by 3x and 6x.
+    // Runtime.enable and fails at 30.0s — 20s on a proxied session, where the
+    // first of those is skipped. The sentence exists to price a retry, so "the
+    // full timeout" — one 10s send — understates it by 2-3x and 6x.
     // Each path runs a different number of 10s sends (Metro 3, Chromium 6), so
     // each states its own figure; one OR-regex over both let the two swap.
     for (const { guidance, cost } of [
-      { guidance: metro().guidance, cost: "costs about 30s" },
+      { guidance: metro().guidance, cost: "costs 20-30s" },
       {
         guidance: chromium("runtime_unresponsive", FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT)
           .guidance,
@@ -381,7 +382,9 @@ describe("cdp_unreachable guidance vs the live-app codes behind it", () => {
       guidance,
       "'Chromium CDP on port': the app answered and has no drivable page, so it is up and " +
         "only lacks a window. Ask the user to bring one back — chromium-tabs cannot open one " +
-        "— and do not relaunch onto a live app, which gives you a second copy and no window."
+        "— and do not relaunch onto a live app: it comes up as a second copy with a window of " +
+        "its own on a different port, or dies on the single-instance lock, and neither gives " +
+        "this id a page."
     );
     // #880: that message asks about --remote-debugging-port on the port that just
     // answered the request it reports on, which is one plausible step from a

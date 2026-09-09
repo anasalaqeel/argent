@@ -82,8 +82,13 @@ describe("expectNoForbiddenAdvice", () => {
       "Do not keep using the old id.",
       "Do not relaunch it anyway.",
       "Do not just relaunch it.",
+      "It is not enough to just relaunch it.",
+      "It is never safe to simply relaunch a live app.",
       "Follow the guidance on its result.",
       "The guidance names the relaunch that works.",
+      "Do not ignore the guidance debugger-status returns.",
+      "Never ignore the guidance on the result.",
+      "You cannot skip the guidance here.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -104,8 +109,14 @@ describe("expectNoForbiddenAdvice", () => {
       "It only lacks a window — relaunch it there.",
       "Just relaunch it.",
       "It may still be up; just relaunch the app.",
+      "Simply relaunch it once.",
+      "Relaunch it regardless.",
       "debugger-status returns a guidance field, but ignore the guidance on Chromium.",
       "It returns a guidance field, but that guidance is stale here.",
+      "Call debugger-status, but do not follow the guidance on its result.",
+      "Read the result and skip the guidance.",
+      "Disregard the guidance on Chromium.",
+      "The guidance is out of date on Chromium.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

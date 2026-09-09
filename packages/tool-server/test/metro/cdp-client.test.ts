@@ -52,6 +52,49 @@ describe("CDPClient", () => {
    * Debugger.paused arrived. Held behaviourally rather than as a comment, because
    * the message asserts what send() does and the two must not drift.
    */
+  it("reports the pause it was told about when a send times out", async () => {
+    // The send-time guard covers Runtime.evaluate and Runtime.callFunctionOn
+    // only, and on a shared session the pause can arrive after the send — so the
+    // message has to read pausedAt() when it is built, not when the send was
+    // queued. Runtime.enable is deliberately outside the guard.
+    const client = new CDPClient(`ws://127.0.0.1:${port}`);
+    const connected = client.connect();
+    const ws = await waitForServer();
+    ws.on("message", (raw) => {
+      const { id, method } = JSON.parse(String(raw)) as { id: number; method: string };
+      if (method !== "Runtime.enable") ws.send(JSON.stringify({ id, result: {} }));
+    });
+    await connected;
+
+    const pending = rejection(client.send("Runtime.enable", {}, 300));
+    // The user's own debugger stops the runtime after the send is on the wire.
+    ws.send(
+      JSON.stringify({
+        method: "Debugger.paused",
+        params: {
+          reason: "other",
+          callFrames: [{ url: "http://localhost:8081/index.bundle", location: { lineNumber: 41 } }],
+        },
+      })
+    );
+    const err = (await pending) as Error;
+
+    expect(getFailureSignal(err)).toMatchObject({
+      error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
+    });
+    expect(err.message, "names the pause and where").toContain(
+      "The runtime reported a pause at a breakpoint at http://localhost:8081/index.bundle:42"
+    );
+    expect(err.message, "and does not deny the pause it was told about").not.toContain(
+      "Nothing reported a pause on this session"
+    );
+    // The remedy the pause makes wrong, barred on this branch only.
+    expect(err.message, "does not send a paused runtime to a restart").toContain(
+      "do not restart the app, which throws the debug session away"
+    );
+    await client.disconnect();
+  });
+
   it("refuses Runtime.evaluate while paused instead of timing it out", async () => {
     const client = new CDPClient(`ws://127.0.0.1:${port}`);
     const connected = client.connect();
@@ -71,10 +114,11 @@ describe("CDPClient", () => {
         },
       })
     );
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => client.events.on("paused", () => resolve()));
 
-    // A timeout long enough that timing out rather than refusing would take it:
-    // the rejection has to come from the guard, not from the timer.
+    // The mock answers everything, so with the guard gone this send RESOLVES:
+    // the discriminator is reject-vs-resolve, and the generous timeout only
+    // keeps a slow machine from turning a pass into a timeout.
     const err = await rejection(client.send("Runtime.evaluate", { expression: "1" }, 5_000));
     expect(getFailureSignal(err)).toMatchObject({
       error_code: FAILURE_CODES.JS_RUNTIME_PAUSED,
@@ -355,16 +399,10 @@ describe("CDPClient", () => {
       // what timed out.
       pinsOnce(
         message,
-        "This send timed out rather than being refused, so no Debugger.paused reached this " +
-          "session — with one in hand Runtime.evaluate is rejected up front as " +
-          "JS_RUNTIME_PAUSED naming the location, never timed out."
-      );
-      pinsOnce(
-        message,
-        "That only rules out a pause the session was told about: Debugger is enabled on the " +
-          "Metro connect and never on the Chromium one, and once the session is established " +
-          'debugger-status reports "connected" either way — so have the user check the app ' +
-          "before choosing."
+        "Nothing reported a pause on this session, which rules one out only where Debugger is " +
+          "enabled: the Metro connect enables it and the Chromium one never does. Once the " +
+          'session is established debugger-status reports "connected" either way, so have the ' +
+          "user check the app before choosing."
       );
       // The claim this replaced, which the same send() disproves one branch above
       // the timer (see the JS_RUNTIME_PAUSED case below): pausedError names the
@@ -386,7 +424,7 @@ describe("CDPClient", () => {
       // Both ends of the retry discipline. Each attempt waits out this full timeout,
       // so a loosened "unless it looks slow" at one end or a "retry until it answers"
       // at the other undoes the reason the guidance is in the message at all.
-      pinsOnce(message, "Do not retry in a loop. This send timed out rather than being refused");
+      pinsOnce(message, "Do not retry in a loop. Nothing reported a pause on this session");
       // Where the Chromium recovery lives. This message no longer restates it:
       // it named a relaunch procedure that had to stay in step with two guidance
       // strings and four prose surfaces, and the five drifted apart. The one

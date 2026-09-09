@@ -17,22 +17,26 @@ import { expect } from "vitest";
 const NEGATED = String.raw`(?:do(?:es)?n't |do(?:es)? not |cannot |can't |must not |never |is not |are not |not )(?:be |been )?`;
 
 const FORBIDDEN: [RegExp, string][] = [
-  // `anyway` is one wording of it; `just relaunch` is the other, and it is the
-  // one a shortening rewrite reaches for. Both take the NEGATED guard its six
-  // siblings carry — without it "Do not relaunch it anyway" fires on itself.
+  // `anyway` is one wording of it; the rest are what a shortening rewrite
+  // reaches for. Every pattern here takes the NEGATED guard, and it spans a
+  // short run of words: the negation is not always adjacent ("it is not enough
+  // to just relaunch it"), and without the span that correct sentence fires.
   [
     new RegExp(
-      String.raw`(?<!${NEGATED})relaunch (?:it |the app )?anyway|(?<!${NEGATED})just relaunch`,
+      String.raw`(?<!${NEGATED}[^.]{0,24})(?:relaunch (?:it |the app )?(?:anyway|regardless)|` +
+        String.raw`(?:just|simply) relaunch)`,
       "i"
     ),
     "relaunching without the exit confirmed",
   ],
   // The five prose surfaces exist to route the reader to one copy of the
   // recovery. Naming the field and then discarding it is the shape that leaves
-  // every routing pin green while inverting what the surface tells the reader.
+  // every routing pin green while inverting what the surface tells the reader —
+  // "do not follow the guidance" contains the phrase the pin looks for.
   [
     new RegExp(
-      String.raw`ignore (?:the |its )?\`?guidance|\`?guidance\`? (?:is )?(?:stale|wrong)`,
+      String.raw`(?<!${NEGATED}[^.]{0,24})(?:ignore|skip|disregard|do not follow|don't follow) ` +
+        String.raw`(?:the |its )?\`?guidance|\`?guidance\`? is (?:stale|wrong|out of date)\b`,
       "i"
     ),
     "discarding the guidance the surface routes to",

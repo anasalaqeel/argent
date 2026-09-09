@@ -110,10 +110,12 @@ afterAll(async () => {
 
 describe("a JS runtime that never answers an awaited evaluate", () => {
   it("still resolves, so debugger-status reports connected rather than runtime_unresponsive", async () => {
+    const startedAt = Date.now();
     const result = (await registry.invokeTool("debugger-status", {
       port: mockPort,
       device_id: "mock-device",
     })) as Record<string, unknown>;
+    const elapsed = Date.now() - startedAt;
 
     expect(result.status).toBe("connected");
     expect(result.reason, "no not-connected reason at all").toBeUndefined();
@@ -136,5 +138,10 @@ describe("a JS runtime that never answers an awaited evaluate", () => {
       expect(answered, `the mock answered awaited evaluate id=${id}`).not.toContain(id);
     }
     expect(answered.size, "the rest of the pipeline was answered").toBeGreaterThan(0);
+    // The one signal a softened mock cannot fake: withholding both awaited sends
+    // costs two real DEFAULT_TIMEOUT_MS expiries. A mock that answers them
+    // finishes in well under a second, and the bookkeeping above is written
+    // beside the send rather than read off the wire.
+    expect(elapsed, "the two withheld sends were really waited out").toBeGreaterThan(15_000);
   }, 40_000);
 });

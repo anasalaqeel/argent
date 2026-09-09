@@ -92,7 +92,7 @@ Argent supports physical iPhones; physical iPads are not supported yet. `list-de
 | `chromium-cookies` | Read and write cookies, including `HttpOnly` ones                                                                    |
 | `chromium-storage` | Read and write `localStorage` and `sessionStorage` of the active page                                                |
 
-All three drive the active page, so an app that is running with no open tab or window fails them before they run. The same holds for `describe`, `screenshot` and the `debugger-*` tools, and `list-devices` drops such an app exactly as it drops one that exited — so a missing Chromium entry is not evidence the app is gone. Call `debugger-status` on the id you already have: it reports a `reason` and a `guidance` field naming the recovery for the state it found. `restart-app` and `reinstall-app` are refused on Chromium, and `boot-device` only ever starts an app, so quitting one is the user's move.
+All three drive the active page, so an app that is running with no open tab or window fails them before they run. The same holds for `describe`, `screenshot` and the Chromium-capable `debugger-*` tools, and `list-devices` drops such an app exactly as it drops one that exited — so a missing Chromium entry is not evidence the app is gone. Call `debugger-status` on the id you already have: it reports a `reason` and a `guidance` field naming the recovery for the state it found. `restart-app` and `reinstall-app` are refused on Chromium, and `boot-device` only ever starts an app, so quitting one is the user's move.
 
 ## Profiling
 
