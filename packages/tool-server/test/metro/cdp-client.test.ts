@@ -569,6 +569,10 @@ describe("CDPClient", () => {
       // "it comes back on a new port" sends the reader to discard an id that is
       // still right, and to hunt for one on a port list-devices does not probe.
       pinsOnce(message, "A relaunch on a new port is a new id");
+      // And the way out of the set it just named: a browser the user restarts
+      // themselves is never tracked - trackChromiumPort has one caller, the
+      // Electron boot - so on that branch the port only ever comes from them.
+      pinsOnce(message, "take the port from the user if they name one");
       expect(message, "claims no new port it cannot know about").not.toMatch(
         /either way it is on a new port|comes back on a new port/i
       );
