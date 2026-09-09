@@ -268,23 +268,29 @@ export class CDPClient {
    */
   private locateFrames(callFrames: unknown): { location: string } | undefined {
     // Reached from the request timer, where a throw is an uncaught exception
-    // rather than one rejected send, so a malformed Debugger.paused takes the
-    // process down. The payload is another debugger's, not ours.
-    const frames = (Array.isArray(callFrames) ? callFrames : []) as ({
-      location?: { lineNumber?: number; scriptId?: string };
-      url?: string;
-    } | null)[];
+    // that also leaves the send unsettled, and the payload is another debugger's
+    // - so every field is checked for its type, not for presence.
+    const frames: unknown[] = Array.isArray(callFrames) ? callFrames : [];
 
-    for (const frame of frames) {
-      const scriptId = frame?.location?.scriptId;
-      const url = frame?.url || (scriptId ? this.scripts.get(scriptId)?.url : undefined);
+    for (const raw of frames) {
+      const frame = (raw ?? {}) as { location?: { lineNumber?: unknown; scriptId?: unknown } };
+      const scriptId = frame.location?.scriptId;
+      const own = (raw as { url?: unknown })?.url;
+      const url =
+        typeof own === "string" && own
+          ? own
+          : typeof scriptId === "string"
+            ? this.scripts.get(scriptId)?.url
+            : undefined;
 
       if (!url) continue;
 
-      const line = frame?.location?.lineNumber;
+      const line = frame.location?.lineNumber;
       const where = trimBundleQuery(url);
 
-      return { location: line === undefined ? where : `${where}:${line + 1}` };
+      return {
+        location: typeof line === "number" ? `${where}:${line + 1}` : where,
+      };
     }
 
     return undefined;
@@ -341,9 +347,10 @@ export class CDPClient {
             `choosing: if it is paused, ask them to resume it, because quitting throws the ` +
             `debug session away. `) +
         `If it is hung, get the app restarted: restart-app on iOS / Android / Vega. On ` +
-        `Chromium restart-app is refused and boot-device only starts an app, so the user ` +
-        `quits it and boot-device brings it back once it has exited. Then reconnect and ` +
-        `retry once.`
+        `Chromium restart-app is refused, so the quit is the user's and the relaunch waits ` +
+        `for the exit: boot-device with electronAppPath brings an Electron app back, a ` +
+        `browser only comes back if the user starts it again with --remote-debugging-port, ` +
+        `and either way it is on a new port and so a new id. Then reconnect and retry once.`
     );
   }
 

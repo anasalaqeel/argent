@@ -101,6 +101,16 @@ describe("expectNoForbiddenAdvice", () => {
       "use restart-app — not supported on Chromium",
       "On iOS / Android / Vega, use `restart-app`; on Chromium it is refused.",
       "Use `restart-app` (not on Chromium) to relaunch it.",
+      // All three dashes, because the repo writes clause breaks with each.
+      "use `restart-app` - on Chromium it is refused.",
+      "use `restart-app` – on Chromium it is refused.",
+      // `use` unanchored matches the tail of "because", and the negation the
+      // lookbehind would need is on the other side of the verb.
+      "This is because `restart-app` is refused on Chromium.",
+      "The refusal exists because restart-app cannot stop a Chromium app.",
+      "Never boot the app again while it is up.",
+      "A missing entry does not show the app exited.",
+      "Do not ignore that guidance.",
     ])
       expectNoForbiddenAdvice(text, `correct: ${text}`);
   });
@@ -139,6 +149,14 @@ describe("expectNoForbiddenAdvice", () => {
       "The app is not listed, so just relaunch it.",
       "list-devices does not show it; just relaunch the app.",
       "debugger-status is not needed here, ignore the guidance.",
+      // The word order the mirror pattern has to cover, and the rewordings each
+      // pattern is one synonym away from missing.
+      "On Chromium use restart-app to relaunch it.",
+      "Reuse your existing id.",
+      "A missing entry shows the app exited.",
+      "An absent entry indicates the app is gone.",
+      "If nothing is listed, boot the app again.",
+      "Ignore that guidance on Chromium.",
     ])
       expect(() => expectNoForbiddenAdvice(text, "surface"), text).toThrow();
   });

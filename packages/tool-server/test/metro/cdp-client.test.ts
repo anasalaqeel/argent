@@ -108,6 +108,9 @@ describe("CDPClient", () => {
   it.each([
     ["a non-iterable callFrames", 42],
     ["a null frame", [null]],
+    ["a non-string url", [{ url: 42 }]],
+    ["an object url", [{ url: {} }]],
+    ["a non-numeric lineNumber", [{ url: "http://a/b", location: { lineNumber: "7" } }]],
   ])("survives %s on Debugger.paused", async (_what, callFrames) => {
     const client = new CDPClient(`ws://127.0.0.1:${port}`);
     const connected = client.connect();
@@ -125,11 +128,12 @@ describe("CDPClient", () => {
     expect(getFailureSignal(err)).toMatchObject({
       error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
     });
-    // Still reports the pause, just without a place to point at.
+    // Still reports the pause. A location is only offered where every field it is
+    // built from was the type it is read as; nothing else is guessed at.
     expect(err.message, "names the pause").toContain(
       "The session reported a pause at a breakpoint"
     );
-    expect(err.message, "and no location it could not read").not.toMatch(/at a breakpoint at /);
+    expect(err.message, "and no line it could not read").not.toMatch(/:NaN|:7undefined|:\[object/);
     await client.disconnect();
   });
 
@@ -492,10 +496,16 @@ describe("CDPClient", () => {
         message,
         `If it is hung, get the app restarted: restart-app on ${platformTag(restartApp)}.`
       );
+      // Both relaunch branches and the id churn, the three facts CHROMIUM_GUIDANCE
+      // carries: boot-device's Chromium branch dispatches on electronAppPath, so
+      // it cannot bring a browser back, and electronPort defaults to a free port,
+      // so whatever comes back is a different id.
       pinsOnce(
         message,
-        "On Chromium restart-app is refused and boot-device only starts an app, so the user " +
-          "quits it and boot-device brings it back once it has exited."
+        "On Chromium restart-app is refused, so the quit is the user's and the relaunch " +
+          "waits for the exit: boot-device with electronAppPath brings an Electron app " +
+          "back, a browser only comes back if the user starts it again with " +
+          "--remote-debugging-port, and either way it is on a new port and so a new id."
       );
       // And does not hand the recovery to debugger-status, which is the one tool
       // that cannot give it: a post-connect hang leaves the socket OPEN, so it

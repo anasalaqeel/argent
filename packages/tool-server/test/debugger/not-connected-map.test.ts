@@ -197,60 +197,87 @@ describe("runtime_unresponsive prices the retry it forbids", () => {
     }
   }
 
-  it("reconciles both shapes the detail beside it can take", async () => {
-    // The detail is the shared cdp-client timeout message and it has two branches:
-    // one that reports a pause the session announced, one that reports none and
-    // asks the user which state the app is in. This guidance ends on a restart, so
-    // against the first it has to yield and against the second it has to close the
-    // ask - otherwise the two ship contradicting instructions in one payload.
+  it("answers the detail beside it, one arm per shape that detail can take", async () => {
+    // buildNotConnected picks the guidance by (reason, platform) alone - it never
+    // reads the error - so the two fields are reconciled by what each STRING says,
+    // and the premises have to be read off the real detail rather than assumed.
     const [unpaused, paused] = await Promise.all([
       realCdpTimeoutDetail(),
       realCdpTimeoutDetail(true),
     ]);
-    const build = (detail: string, device_id: string) =>
-      buildNotConnected(
-        "runtime_unresponsive",
-        new FailureError(detail, {
-          error_code: FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT,
-          failure_stage: "debugger_cdp_send",
-          failure_area: "tool_server",
-          error_kind: "timeout",
-        }),
-        { port: 8081, device_id }
-      );
+    expect(unpaused, "the no-pause branch asks the user to choose").toMatch(
+      /if it is paused, ask them to resume it/
+    );
+    expect(paused, "the other branch names a located pause").toContain(
+      "The session reported a pause at a breakpoint at"
+    );
 
-    for (const device_id of ["emulator-5554", "chromium-cdp-9222"]) {
-      // The premises, read off the real messages rather than assumed: one branch
-      // names a located pause, the other asks the user to tell the two apart.
-      expect(paused, "the paused branch names the pause").toContain(
-        "The session reported a pause at a breakpoint at"
-      );
-      expect(unpaused, "the other branch asks the user to choose").toMatch(
-        /if it is paused, ask them to resume it/
-      );
+    const metroGuidance = metro().guidance;
+    const chromiumGuidance = chromium(
+      "runtime_unresponsive",
+      FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
+    ).guidance;
 
-      const onPaused = build(paused, device_id).guidance;
-      // Against a located pause the restart is the wrong move and the resume comes
-      // first - the app is a session the user is sitting in.
-      expect(onPaused, `${device_id}: defers the restart to the detail`).toContain(
-        "get it resumed and retry once before restarting anything"
-      );
-      expect(onPaused, `${device_id}: still rules the pause out as the cause`).toMatch(
-        /paused at a breakpoint does not reach this reason|a pause stops the JS thread/
-      );
-
-      const onUnpaused = build(unpaused, device_id).guidance;
-      // Against the other branch the ask is answered: the guidance already says
-      // what timed out, so passing the question to the user is a step with no
+    for (const [where, guidance] of [
+      ["metro", metroGuidance],
+      ["chromium", chromiumGuidance],
+    ] as const) {
+      // Both arms answer the ask above, so passing it on is a step with no
       // decision left in it.
-      expect(onUnpaused, `${device_id}: closes the detail's ask`).toContain(
-        "which state the app is in is already answered above"
+      expect(guidance, `${where}: closes the detail's ask`).toContain(
+        "the sentence above answers it, so skip that"
       );
-      // And offers no resume ask of its own: nothing in the catalogue can resume a
-      // paused runtime, so a resume ask here is an instruction with no tool.
-      expect(onUnpaused, `${device_id}: no resume ask of its own`).not.toMatch(
+      // And neither raises a resume of its own: nothing in the catalogue can
+      // resume a paused runtime, so a resume ask here has no tool behind it.
+      expect(guidance, `${where}: no resume ask of its own`).not.toMatch(
         /ask (the user|them) to resume/i
       );
+    }
+
+    // Only the Metro connect sends Debugger.enable, so only its detail can report
+    // a pause - and there the restart has to yield to it. One restart sentence,
+    // carrying the condition: a second, unconditional one appended after it is
+    // the last thing a reader acts on.
+    expect(metroGuidance, "the restart yields to a reported pause").toContain(
+      "get it resumed and retry once before restarting anything"
+    );
+    expect(
+      metroGuidance.match(/restart it \(restart-app\)/gi) ?? [],
+      "exactly one restart instruction, and it is the conditioned one"
+    ).toEqual(["restart it (restart-app)"]);
+    expect(metroGuidance, "conditioned on the detail").toContain(
+      "If the detail reports no pause, restart it (restart-app)"
+    );
+
+    // The Chromium arm states no pause conditional at all: its own first sentence
+    // rules the state out, so a conditional on it reads as a state the reader
+    // should look for.
+    expect(chromiumGuidance, "no pause conditional on the arm that cannot pause").not.toMatch(
+      /if the detail reports|get it resumed/i
+    );
+  });
+
+  it("keeps the timeout message's Chromium sentence in step with the guidance", async () => {
+    // Both ship in one not_connected payload - this message is the detail beside
+    // that guidance - so a Chromium fact stated in one and contradicted or
+    // dropped in the other is two procedures in one result. Held as facts rather
+    // than as a shared string, because the two are written to different lengths.
+    const detail = await realCdpTimeoutDetail();
+    const { guidance } = chromium(
+      "runtime_unresponsive",
+      FAILURE_CODES.DEBUGGER_CDP_REQUEST_TIMEOUT
+    );
+    for (const [what, fact] of [
+      // boot-device's Chromium branch dispatches on electronAppPath...
+      ["the Electron branch", /boot-device with electronAppPath/],
+      // ...so a browser found by port probing has no path and only the user can
+      // bring it back.
+      ["the browser branch", /--remote-debugging-port/],
+      // And electronPort defaults to a free port, so it comes back as a new id.
+      ["the new id", /new port/],
+    ] as const) {
+      expect(detail, `the detail names ${what}`).toMatch(fact);
+      expect(guidance, `the guidance names ${what}`).toMatch(fact);
     }
   });
 

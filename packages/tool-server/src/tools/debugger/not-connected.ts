@@ -30,18 +30,25 @@ export interface DebuggerNotConnectedResult {
 }
 
 /**
- * The detail beside this guidance is the shared request-timeout message, and it
- * reports whether the session announced a pause. A pause did not cause this
- * reason, but it does mean the user is stopped in a debug session, and the
- * restart this guidance ends on would discard it — so the two ship contradicting
- * instructions in one payload unless the restart yields to the detail.
+ * The detail beside either arm is the shared request-timeout message, whose
+ * no-pause branch asks the user which state the app is in. Both arms answer that
+ * above, so the ask is a step with no decision left in it.
  */
-const DETAIL_NAMES_A_BREAKPOINT =
-  "The detail says whether the session announced a pause. One it announced did not cause " +
+const DETAIL_ASK_IS_ANSWERED =
+  "The detail asks the user to check which state the app is in; the sentence above " +
+  "answers it, so skip that. ";
+
+/**
+ * Only the Metro connect enables Debugger, so only there can the detail report a
+ * pause. It did not cause this reason, but it does mean the user is stopped in a
+ * debug session that the restart below would discard — so the restart yields to
+ * it, or the two ship contradicting instructions in one payload.
+ */
+const DETAIL_MAY_NAME_A_PAUSE =
+  "It also says whether the session announced a pause. One it announced did not cause " +
   "this — a pause stops the JS thread and what timed out here is the inspector's — but a " +
   "session stopped in a debugger is one a restart discards, so get it resumed and retry " +
-  "once before restarting anything. Where it reports none, its ask that the user check " +
-  "which state the app is in is already answered above, so skip it. ";
+  "once before restarting anything. ";
 
 /**
  * Guidance for Metro-backed targets (iOS / Android / Vega). Chromium overrides
@@ -70,7 +77,8 @@ const GUIDANCE: Record<DebuggerNotConnectedReason, string> = {
     "thread, and the two that do wait on the JS thread are both swallowed, so the " +
     "session resolves and debugger-status reports connected. What timed out is one of " +
     "those inspector-answered sends, so the inspector itself has stopped answering. " +
-    DETAIL_NAMES_A_BREAKPOINT +
+    DETAIL_ASK_IS_ANSWERED +
+    DETAIL_MAY_NAME_A_PAUSE +
     "Do not retry in a loop: the sends are awaited in sequence and each waits out its " +
     "own 10s timeout, so an attempt costs 20-30s — two on a session shared with another " +
     "debugger, three otherwise — not one timeout. If the detail reports no pause, restart " +
@@ -159,7 +167,7 @@ const CHROMIUM_GUIDANCE: Partial<Record<DebuggerNotConnectedReason, string>> = {
     "renderer is frozen. A renderer paused at a breakpoint does not reach this reason — it " +
     "answers the viewport read, the one send on this path that is not swallowed, so the " +
     "session resolves and debugger-status reports connected. " +
-    DETAIL_NAMES_A_BREAKPOINT +
+    DETAIL_ASK_IS_ANSWERED +
     "Do not retry in a loop: the five priming sends and the viewport read are awaited in " +
     "sequence and each waits out its own 10s timeout, so an attempt costs about a " +
     "minute, not one timeout. " +
