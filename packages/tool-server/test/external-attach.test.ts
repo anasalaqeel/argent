@@ -18,6 +18,7 @@ import {
   setSimulatorClipboardText,
 } from "../src/utils/simulator-client";
 import { resolveDevice } from "../src/utils/device-info";
+import { scopeTempHome } from "./helpers/temp-home";
 
 /**
  * The simulator-server blueprint's attach branch, against a stand-in speaking
@@ -34,6 +35,7 @@ import { resolveDevice } from "../src/utils/device-info";
 
 vi.mock("../src/utils/ios-devices", () => ({
   isTvOsSimulator: vi.fn(async () => false),
+  isFoldableSimulator: vi.fn(async () => false),
   listIosSimulators: vi.fn(async () => []),
   getSimulatorRuntimeKind: vi.fn(async () => undefined),
   getCachedSimulatorRuntimeKind: vi.fn(() => undefined),
@@ -199,6 +201,13 @@ function republishAt(simulatorServer: FakeSimulatorServer): void {
   fs.writeFileSync(descriptorPath, JSON.stringify(descriptor));
 }
 
+/**
+ * The hook below drops the suite-wide discovery guard, so until a test
+ * publishes its own descriptor, discovery reads `~/.argent/providers`. Scoping
+ * the home keeps that a directory this run owns.
+ */
+scopeTempHome("argent-external-attach-home-");
+
 beforeEach(() => {
   temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "argent-attach-"));
   delete process.env.ARGENT_DEVICE_PROVIDERS;
@@ -300,7 +309,7 @@ describe("attaching to a provider's simulator-server", () => {
     const simulatorServer = await startSimulatorServer();
     const device = attachTo(simulatorServer);
     const instance = await simulatorServerBlueprint.factory({}, device, { device });
-    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBeUndefined();
+    await expect(setSimulatorClipboardText(instance.api, "hello")).resolves.toBe("set");
     expect(simulatorServer.clipboardTexts).toEqual(["hello"]);
   });
 
